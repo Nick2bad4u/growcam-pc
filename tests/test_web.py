@@ -93,7 +93,7 @@ def test_duplicate_server_bind_preserves_the_original_socket_error() -> None:
     first = GrowCamHTTPServer(("127.0.0.1", 0), WebConfig("192.0.2.1"))
     port = first.server_address[1]
     try:
-        with pytest.raises(OSError) as raised:
+        with pytest.raises(OSError, match=r"(?:Address already in use|socket address)") as raised:
             _ = GrowCamHTTPServer(("127.0.0.1", port), WebConfig("192.0.2.1"))
         assert raised.value.errno == errno.EADDRINUSE or getattr(raised.value, "winerror", None) == 10048
     finally:
