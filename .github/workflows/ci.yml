@@ -34,6 +34,7 @@ jobs:
           version: 0.11.26
           enable-cache: true
           cache-dependency-glob: uv.lock
+          cache-suffix: quality
 
       - name: Install locked dependencies
         run: uv sync --frozen --all-groups
@@ -91,6 +92,7 @@ jobs:
           version: 0.11.26
           enable-cache: true
           cache-dependency-glob: uv.lock
+          cache-suffix: ${{ matrix.os }}-py${{ matrix.python }}
 
       - name: Install locked dependencies
         run: uv sync --frozen --all-groups
