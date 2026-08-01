@@ -1,0 +1,608 @@
+"""Small, tolerant DVRIP/XMEye client for camera queries and guarded writes."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import socket
+import struct
+import threading
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import TYPE_CHECKING, Any, Self, cast
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+    from pathlib import Path
+
+_HEADER = struct.Struct("<BB2xIIBBHI")
+_MAGIC = 0xFF
+_SOFIA_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+_OK = {100, 515}
+_DOWNLOAD_CLAIM_MESSAGE = 1425
+_DOWNLOAD_DATA_MESSAGE = 1426
+_PLAYBACK_DATA_MESSAGE = 1422
+_PLAYBACK_EOF_MESSAGE = 1423
+
+
+class DVRIPError(RuntimeError):
+    """Raised when the camera rejects or corrupts a DVRIP request."""
+
+
+@dataclass(frozen=True)
+class LoginInfo:
+    """Stable device metadata returned by a successful camera login."""
+
+    session_id: int
+    channel_count: int
+    device_type: str
+    keepalive_interval: int
+
+
+def sofia_hash(password: str) -> str:
+    """Encode a password using Xiongmai's eight-character Sofia hash."""
+    digest = hashlib.md5(password.encode("utf-8"), usedforsecurity=False).digest()
+    return "".join(_SOFIA_CHARS[(digest[index * 2] + digest[index * 2 + 1]) % 62] for index in range(8))
+
+
+class DVRIPClient:
+    """Synchronous client for the camera's TCP/34567 control service."""
+
+    def __init__(
+        self,
+        host: str,
+        port: int = 34567,
+        username: str = "admin",
+        password: str = "",
+        timeout: float = 10.0,
+    ) -> None:
+        """Configure a client without opening a network connection."""
+        self.host = host
+        self.port = port
+        self.username = username
+        self.password = password
+        self.timeout = timeout
+        self._socket: socket.socket | None = None
+        self._session_id = 0
+        self._sequence = 0
+        self._admin_token = ""
+        self.login_info: LoginInfo | None = None
+
+    def __enter__(self) -> Self:
+        """Connect and return this client for context-manager use."""
+        _ = self.connect()
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        """Close the camera connection when leaving a context manager."""
+        self.close()
+
+    def connect(self) -> LoginInfo:
+        """Open the DVRIP connection and authenticate to the camera."""
+        if self._socket is not None:
+            raise DVRIPError("Client is already connected")
+        self._socket = socket.create_connection((self.host, self.port), self.timeout)
+        self._socket.settimeout(self.timeout)
+        response = self._request(
+            1000,
+            {
+                "EncryptType": "MD5",
+                "LoginType": "DVRIP-Web",
+                "PassWord": sofia_hash(self.password),
+                "UserName": self.username,
+            },
+            include_session=False,
+        )
+        self._require_ok("login", response)
+        session = response.get("SessionID", 0)
+        self._session_id = int(session, 16) if isinstance(session, str) else int(session)
+        self._admin_token = str(response.get("AdminToken", ""))
+        device_type = str(response.get("DeviceType") or response.get("DeviceType ") or "XMEye").strip()
+        self.login_info = LoginInfo(
+            session_id=self._session_id,
+            channel_count=int(response.get("ChannelNum", 1)),
+            device_type=device_type,
+            keepalive_interval=int(response.get("AliveInterval", 20)),
+        )
+        return self.login_info
+
+    def close(self) -> None:
+        """Close the socket and discard session credentials."""
+        if self._socket is not None:
+            try:
+                self._socket.close()
+            finally:
+                self._socket = None
+                self._session_id = 0
+                self._admin_token = ""
+                self.login_info = None
+
+    def system_info(self, name: str) -> dict[str, Any] | list[Any]:
+        """Fetch one named system-information record."""
+        response = self._named_request(1020, name)
+        value = response.get(name)
+        if isinstance(value, dict):
+            return cast("dict[str, Any]", value)
+        if isinstance(value, list):
+            return cast("list[Any]", cast("object", value))
+        return {}
+
+    def config_get(self, name: str) -> Any:
+        """Fetch one named camera configuration record."""
+        response = self._named_request(1042, name)
+        return response.get(name)
+
+    def config_set(self, name: str, value: object) -> None:
+        """Replace one named camera configuration record."""
+        response = self._request(1040, {"Name": name, name: value})
+        self._require_ok(name, response)
+
+    def capability_get(self, name: str = "SystemFunction") -> Any:
+        """Fetch one named camera capability record."""
+        response = self._named_request(1360, name)
+        return response.get(name)
+
+    def recordings(
+        self,
+        *,
+        start: datetime,
+        end: datetime,
+        channel: int = 0,
+        file_type: str = "h264",
+        event: str = "*",
+    ) -> list[dict[str, Any]]:
+        """List unique recording records in the requested time window."""
+        if file_type not in {"h264", "jpg"}:
+            raise ValueError("file_type must be 'h264' or 'jpg'")
+        if event not in {"*", "A", "E", "H", "M", "R"}:
+            raise ValueError("event must be one of '*', 'A', 'E', 'H', 'M', or 'R'")
+        name = "OPFileQuery"
+        results: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        cursor = start
+        for _page in range(4096):
+            response = self._request(
+                1440,
+                {
+                    "Name": name,
+                    name: {
+                        "BeginTime": _camera_time(cursor),
+                        "EndTime": _camera_time(end),
+                        "Channel": channel,
+                        "Event": event,
+                        "Type": file_type,
+                    },
+                },
+            )
+            self._require_ok(name, response, allowed={100, 110, 111, 119, 515})
+            raw_files = response.get(name)
+            page: list[dict[str, Any]] = []
+            if isinstance(raw_files, list):
+                page.extend(
+                    cast("dict[str, Any]", item) for item in cast("list[object]", raw_files) if isinstance(item, dict)
+                )
+            added = 0
+            for item in page:
+                filename = str(item.get("FileName", ""))
+                if filename and filename not in seen:
+                    seen.add(filename)
+                    results.append(item)
+                    added += 1
+            status = int(response.get("Ret", 0))
+            if status in {110, 119} or not page:
+                break
+            last_start = page[-1].get("BeginTime")
+            if not isinstance(last_start, str) or not added:
+                break
+            next_cursor = datetime.strptime(last_start, "%Y-%m-%d %H:%M:%S")
+            if next_cursor <= cursor:
+                break
+            cursor = next_cursor
+        else:
+            raise DVRIPError("Recording search exceeded the pagination safety limit")
+        return results
+
+    def download(
+        self,
+        filename: str,
+        destination: Path,
+    ) -> int:
+        """Download one camera recording to a new local file."""
+        if not filename.startswith("/"):
+            raise ValueError("Camera filename must be an absolute DVRIP path")
+        if destination.exists():
+            raise FileExistsError(f"Destination already exists: {destination}")
+        partial = destination.with_name(destination.name + ".part")
+        if partial.exists():
+            raise FileExistsError(f"Partial destination already exists: {partial}")
+        if self._socket is None:
+            raise DVRIPError("Client is not connected")
+
+        start_time, end_time = _recording_times(filename)
+        playback = {
+            "Action": "DownloadStart",
+            "Parameter": {"FileName": filename, "TransMode": "TCP"},
+            "StartTime": _camera_time(start_time),
+            "EndTime": _camera_time(end_time),
+        }
+        body = {
+            "Name": "OPPlayBack",
+            "OPPlayBack": playback,
+            "SessionID": f"0x{self._session_id:08X}",
+        }
+        if self._admin_token:
+            body["AdminToken"] = self._admin_token
+        data_socket = socket.create_connection((self.host, self.port), self.timeout)
+        data_socket.settimeout(max(self.timeout, 30.0))
+        bytes_written = 0
+        keepalive: tuple[threading.Event, threading.Thread, list[Exception]] | None = None
+        try:
+            self._send_packet(data_socket, 1424, body, sequence=0)
+            try:
+                control_body = {"Name": "OPPlayBack", "OPPlayBack": playback}
+                if self._admin_token:
+                    control_body["AdminToken"] = self._admin_token
+                response = self._request(1420, control_body)
+            except TimeoutError as error:
+                raise DVRIPError("Timed out waiting for the camera to accept playback") from error
+            self._require_ok("download start", response)
+            try:
+                message_id, claim_payload, _end = self._receive_packet(data_socket)
+            except TimeoutError as error:
+                raise DVRIPError("Timed out waiting for the camera to claim the download socket") from error
+            if message_id != _DOWNLOAD_CLAIM_MESSAGE:
+                raise DVRIPError(f"Unexpected download claim response message {message_id}")
+            claim = _decode_json(claim_payload, message_id)
+            self._require_ok("download claim", claim)
+            keepalive = self._start_keepalive()
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with partial.open("xb") as output:
+                while True:
+                    try:
+                        message_id, payload, end = self._receive_packet(data_socket)
+                    except TimeoutError as error:
+                        raise DVRIPError("Timed out while receiving recording data") from error
+                    if message_id != _DOWNLOAD_DATA_MESSAGE:
+                        raise DVRIPError(f"Unexpected download data message {message_id}")
+                    _ = output.write(payload)
+                    bytes_written += len(payload)
+                    if end:
+                        break
+            self._finish_keepalive(keepalive)
+            keepalive = None
+            _ = partial.rename(destination)
+            return bytes_written
+        finally:
+            if keepalive is not None:
+                self._stop_keepalive(keepalive)
+            data_socket.close()
+
+    def playback_snapshot(
+        self,
+        filename: str,
+        destination: Path,
+        *,
+        expected_bytes: int,
+        maximum_bytes: int = 1024 * 1024 * 1024,
+    ) -> int:
+        """Capture the currently playable portion of a recording to a new file."""
+        if not filename.startswith("/"):
+            raise ValueError("Camera filename must be an absolute DVRIP path")
+        if expected_bytes <= 0:
+            raise ValueError("expected_bytes must be greater than zero")
+        start_time, end_time = _recording_times(filename)
+        playback = {
+            "Action": "Start",
+            "Parameter": {
+                "Channel": 0,
+                "FileName": filename,
+                "PlayMode": "ByName",
+                "StreamType": 0,
+                "TransMode": "TCP",
+                "Value": 0,
+            },
+            "StartTime": _camera_time(start_time),
+            "EndTime": _camera_time(end_time),
+        }
+        return self._capture_playback(
+            playback,
+            destination,
+            expected_bytes=expected_bytes,
+            maximum_bytes=maximum_bytes,
+        )
+
+    def playback_by_time_snapshot(
+        self,
+        *,
+        start: datetime,
+        end: datetime,
+        destination: Path,
+        file_type: int = 0,
+    ) -> int:
+        """Capture playback selected by camera time and native recording type."""
+        if end <= start:
+            raise ValueError("Playback end time must be after its start time")
+        if file_type < 0:
+            raise ValueError("Playback file type must not be negative")
+        channel = 0
+        playback = {
+            "Action": "Start",
+            "Parameter": {
+                "Channel": channel,
+                "FileName": "",
+                "PlayMode": "ByTime",
+                "StreamType": 0,
+                "TransMode": "TCP",
+                "Value": file_type,
+            },
+            "StartTime": _camera_time(start),
+            "EndTime": _camera_time(end),
+            "StreamType": 0,
+        }
+        return self._capture_playback(
+            playback,
+            destination,
+            expected_bytes=None,
+            maximum_bytes=512 * 1024 * 1024,
+        )
+
+    def _capture_playback(
+        self,
+        playback: Mapping[str, object],
+        destination: Path,
+        *,
+        expected_bytes: int | None,
+        maximum_bytes: int,
+    ) -> int:
+        if expected_bytes is not None and expected_bytes > maximum_bytes:
+            raise ValueError("Recording exceeds the playback snapshot safety limit")
+        if maximum_bytes <= 0:
+            raise ValueError("Playback snapshot safety limit must be greater than zero")
+        if destination.exists():
+            raise FileExistsError(f"Destination already exists: {destination}")
+        partial = destination.with_name(destination.name + ".part")
+        if partial.exists():
+            raise FileExistsError(f"Partial destination already exists: {partial}")
+        if self._socket is None:
+            raise DVRIPError("Client is not connected")
+
+        claim_playback = {**playback, "Action": "Claim"}
+        start_playback = {**playback, "Action": "Start"}
+        body = {
+            "Name": "OPPlayBack",
+            "OPPlayBack": claim_playback,
+            "SessionID": f"0x{self._session_id:08X}",
+        }
+        if self._admin_token:
+            body["AdminToken"] = self._admin_token
+        data_socket = socket.create_connection((self.host, self.port), self.timeout)
+        data_socket.settimeout(max(self.timeout, 30.0))
+        bytes_written = 0
+        keepalive: tuple[threading.Event, threading.Thread, list[Exception]] | None = None
+        try:
+            self._send_packet(data_socket, 1424, body, sequence=0)
+            control_body = {"Name": "OPPlayBack", "OPPlayBack": start_playback}
+            if self._admin_token:
+                control_body["AdminToken"] = self._admin_token
+            try:
+                response = self._request(1420, control_body)
+            except DVRIPError as error:
+                raise DVRIPError(f"Camera rejected the playback control request: {error}") from error
+            self._require_ok("playback start", response)
+            try:
+                message_id, claim_payload, _end = self._receive_packet(data_socket)
+            except DVRIPError as error:
+                raise DVRIPError(f"Camera closed before claiming the playback stream: {error}") from error
+            if message_id != _DOWNLOAD_CLAIM_MESSAGE:
+                raise DVRIPError(f"Unexpected playback claim response message {message_id}")
+            self._require_ok("playback claim", _decode_json(claim_payload, message_id))
+            keepalive = self._start_keepalive()
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with partial.open("xb") as output:
+                while expected_bytes is None or bytes_written < expected_bytes:
+                    try:
+                        message_id, payload, _fragment_end = self._receive_packet(data_socket)
+                    except TimeoutError as error:
+                        if bytes_written > 0:
+                            break
+                        raise DVRIPError("Timed out while receiving playback data") from error
+                    except DVRIPError as error:
+                        if bytes_written > 0 and str(error) == "Camera closed the DVRIP connection":
+                            break
+                        raise DVRIPError(f"Camera closed before returning playback media: {error}") from error
+                    if message_id == _PLAYBACK_EOF_MESSAGE:
+                        break
+                    if message_id != _PLAYBACK_DATA_MESSAGE:
+                        raise DVRIPError(f"Unexpected playback data message {message_id}")
+                    _ = output.write(payload)
+                    bytes_written += len(payload)
+                    if bytes_written > maximum_bytes:
+                        raise DVRIPError("Playback exceeded the snapshot safety limit")
+            if bytes_written == 0:
+                raise DVRIPError("Camera returned no playback data")
+            self._finish_keepalive(keepalive)
+            keepalive = None
+            _ = partial.rename(destination)
+            return bytes_written
+        finally:
+            if keepalive is not None:
+                self._stop_keepalive(keepalive)
+            data_socket.close()
+
+    def _start_keepalive(self) -> tuple[threading.Event, threading.Thread, list[Exception]]:
+        """Keep a long media transfer's authenticated control session alive."""
+        interval = self._keepalive_interval()
+        stop = threading.Event()
+        failures: list[Exception] = []
+
+        def send_keepalives() -> None:
+            while not stop.wait(interval):
+                try:
+                    response = self._request(1006, {"Name": "KeepAlive"})
+                    self._require_ok("keepalive", response)
+                except (OSError, RuntimeError) as error:
+                    failures.append(error)
+                    return
+
+        thread = threading.Thread(
+            target=send_keepalives,
+            name="growcam-dvrip-keepalive",
+            daemon=True,
+        )
+        thread.start()
+        return stop, thread, failures
+
+    def _keepalive_interval(self) -> float:
+        """Choose a heartbeat interval comfortably below the camera timeout."""
+        interval = 5.0
+        if self.login_info is not None:
+            interval = max(1.0, min(10.0, self.login_info.keepalive_interval / 2))
+        return interval
+
+    def _finish_keepalive(
+        self,
+        keepalive: tuple[threading.Event, threading.Thread, list[Exception]],
+    ) -> None:
+        """Stop a media heartbeat and surface a failed control session."""
+        self._stop_keepalive(keepalive)
+        if keepalive[1].is_alive():
+            raise DVRIPError("Camera keepalive thread did not stop after the media transfer")
+        failures = keepalive[2]
+        if failures:
+            raise DVRIPError(f"Camera keepalive failed during media transfer: {failures[0]}") from failures[0]
+
+    def _stop_keepalive(
+        self,
+        keepalive: tuple[threading.Event, threading.Thread, list[Exception]],
+    ) -> None:
+        """Stop a media heartbeat without masking an existing transfer error."""
+        stop, thread, _failures = keepalive
+        stop.set()
+        thread.join(timeout=self.timeout + 1.0)
+
+    def _named_request(self, message_id: int, name: str) -> dict[str, Any]:
+        response = self._request(message_id, {"Name": name})
+        self._require_ok(name, response)
+        return response
+
+    def _request(
+        self,
+        message_id: int,
+        body: dict[str, Any],
+        *,
+        include_session: bool = True,
+    ) -> dict[str, Any]:
+        if self._socket is None:
+            raise DVRIPError("Client is not connected")
+        if include_session:
+            body = {**body, "SessionID": f"0x{self._session_id:08X}"}
+        payload = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\x0a\x00"
+        header = _HEADER.pack(
+            _MAGIC,
+            0,
+            self._session_id,
+            self._sequence,
+            0,
+            0,
+            message_id,
+            len(payload),
+        )
+        self._sequence = (self._sequence + 1) & 0xFFFFFFFF
+        self._socket.sendall(header + payload)
+        return self._receive()
+
+    def _receive(self) -> dict[str, Any]:
+        if self._socket is None:
+            raise DVRIPError("Client is not connected")
+        message_id, raw, _end = self._receive_packet(self._socket)
+        return _decode_json(raw, message_id)
+
+    def _send_packet(
+        self,
+        connection: socket.socket,
+        message_id: int,
+        body: dict[str, Any],
+        *,
+        sequence: int,
+    ) -> None:
+        payload = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        header = _HEADER.pack(
+            _MAGIC,
+            1,
+            self._session_id,
+            sequence,
+            0,
+            0,
+            message_id,
+            len(payload),
+        )
+        connection.sendall(header + payload)
+
+    @staticmethod
+    def _receive_packet(connection: socket.socket) -> tuple[int, bytes, int]:
+        header = _receive_exact(connection, _HEADER.size)
+        (
+            magic,
+            _response,
+            _session,
+            _sequence,
+            _fragment_or_channel,
+            end,
+            message_id,
+            length,
+        ) = _HEADER.unpack(header)
+        if magic != _MAGIC:
+            raise DVRIPError(f"Invalid DVRIP magic byte {magic:#x}")
+        return message_id, _receive_exact(connection, length), end
+
+    @staticmethod
+    def _require_ok(
+        operation: str,
+        response: dict[str, Any],
+        *,
+        allowed: set[int] = _OK,
+    ) -> None:
+        code = int(response.get("Ret", 0))
+        if code not in allowed:
+            raise DVRIPError(f"{operation} rejected by camera (Ret={code})")
+
+
+def _receive_exact(connection: socket.socket, length: int) -> bytes:
+    chunks = bytearray()
+    while len(chunks) < length:
+        chunk = connection.recv(length - len(chunks))
+        if not chunk:
+            raise DVRIPError("Camera closed the DVRIP connection")
+        chunks.extend(chunk)
+    return bytes(chunks)
+
+
+def _camera_time(value: datetime) -> str:
+    return value.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _recording_times(filename: str) -> tuple[datetime, datetime]:
+    match = re.search(
+        r"/(?P<date>\d{4}-\d{2}-\d{2})/\d+/"
+        r"(?P<start>\d{2}\.\d{2}\.\d{2})-(?P<end>\d{2}\.\d{2}\.\d{2})",
+        filename,
+    )
+    if match is None:
+        raise ValueError("Could not infer recording timestamps from camera filename")
+    start = datetime.strptime(f"{match.group('date')} {match.group('start')}", "%Y-%m-%d %H.%M.%S")
+    end = datetime.strptime(f"{match.group('date')} {match.group('end')}", "%Y-%m-%d %H.%M.%S")
+    if end <= start:
+        end += timedelta(days=1)
+    return start, end
+
+
+def _decode_json(raw: bytes, message_id: int) -> dict[str, Any]:
+    raw = raw.rstrip(b"\x00\x0a\\")
+    try:
+        decoded: object = json.loads(raw) if raw else {}
+    except json.JSONDecodeError as error:
+        raise DVRIPError(f"Invalid JSON in DVRIP response {message_id}") from error
+    if not isinstance(decoded, dict):
+        raise DVRIPError(f"Unexpected DVRIP response type for {message_id}")
+    return cast("dict[str, Any]", decoded)

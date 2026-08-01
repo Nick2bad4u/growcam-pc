@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#071013" />
+    <title>GrowCam PC</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body>
+    <main>
+      <header class="page-header">
+        <div>
+          <p class="eyebrow"><span class="nf" aria-hidden="true"></span> LOCAL CAMERA CONSOLE</p>
+          <h1>GrowCam <span>C4</span></h1>
+        </div>
+        <div id="connection" class="status pending" role="status">Connecting</div>
+      </header>
+
+      <nav class="app-tabs" role="tablist" aria-label="Camera views">
+        <button id="tab-live" class="app-tab" type="button" role="tab" aria-selected="true" aria-controls="panel-live" data-tab="live">
+          <span class="nf" aria-hidden="true">󰖟</span>
+          <span>Live</span>
+        </button>
+        <button id="tab-rewind" class="app-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-rewind" data-tab="rewind" tabindex="-1">
+          <span class="nf" aria-hidden="true"></span>
+          <span>Daily rewind</span>
+        </button>
+        <button id="tab-timelapse" class="app-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-timelapse" data-tab="timelapse" tabindex="-1">
+          <span class="nf" aria-hidden="true">󰔚</span>
+          <span>Timelapse</span>
+        </button>
+      </nav>
+
+      <section id="panel-live" class="tab-panel" role="tabpanel" aria-labelledby="tab-live">
+        <section class="viewer live-accent" aria-label="Live camera view">
+          <div class="feed-label"><span class="pulse" aria-hidden="true"></span> LIVE</div>
+          <div class="live-stage">
+            <img id="live-feed" data-src="/stream.mjpg" alt="Live GrowCam video" />
+            <p id="live-placeholder" class="live-placeholder">
+              <span class="nf stage-icon" aria-hidden="true">󰖟</span>
+              <span id="live-message">Starting the live camera feed…</span>
+            </p>
+          </div>
+          <div class="viewer-bar">
+            <span><span class="nf" aria-hidden="true"></span> Live feed · 2560 × 1440 source</span>
+            <a class="icon-link" href="/snapshot.jpg" download="growcam-snapshot.jpg"><span class="nf" aria-hidden="true"></span> Save snapshot</a>
+          </div>
+        </section>
+
+        <section class="metrics" aria-label="Camera status">
+          <article class="metric-device">
+            <p><span class="nf" aria-hidden="true"></span> Device</p>
+            <strong id="device">—</strong>
+            <small id="firmware">Loading firmware…</small>
+          </article>
+          <article class="metric-storage">
+            <p><span class="nf" aria-hidden="true"></span> Recording partition</p>
+            <strong id="storage-total">—</strong>
+            <small id="storage-window">Loading storage…</small>
+          </article>
+          <article class="metric-free">
+            <p><span class="nf" aria-hidden="true"></span> Recording space free</p>
+            <strong id="storage-free">—</strong>
+            <small id="storage-percent">—</small>
+          </article>
+        </section>
+      </section>
+
+      <section id="panel-rewind" class="rewind section-block tab-panel" role="tabpanel" aria-labelledby="tab-rewind" hidden>
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow amber"><span class="nf" aria-hidden="true"></span> ON-CAMERA DAY ARCHIVE</p>
+            <h2 id="rewind-title">Daily rewind</h2>
+            <p class="section-copy">Jump back through the continuous recording blocks stored on the camera.</p>
+          </div>
+          <label class="date-control">
+            <span>Recording day</span>
+            <input id="history-date" type="date" />
+          </label>
+        </div>
+
+        <article class="day-scrubber card">
+          <div class="scrubber-heading">
+            <div>
+              <p class="card-label amber"><span class="nf" aria-hidden="true">󰍹</span> Virtual day viewer</p>
+              <strong>Choose any recorded moment</strong>
+              <p class="muted">The camera stores separate recording blocks, so this viewer stitches them into one day you can scrub through.</p>
+            </div>
+            <output id="history-scrubber-time" for="history-scrubber">12:00 AM</output>
+          </div>
+          <input id="history-scrubber" class="day-range" type="range" min="0" max="86399" step="1" value="0" aria-label="Time of day" />
+          <div class="scrubber-ruler" aria-hidden="true"><span>12 AM</span><span>6 AM</span><span>12 PM</span><span>6 PM</span><span>12 AM</span></div>
+          <div class="viewer-options">
+            <label class="window-control" for="history-window">
+              <span>Preview length</span>
+              <select id="history-window">
+                <option value="120" selected>Quick · 2 minutes</option>
+                <option value="300">5 minutes</option>
+                <option value="full">Full recording block</option>
+              </select>
+            </label>
+            <label class="toggle compact-toggle">
+              <input id="history-continue" type="checkbox" checked />
+              <span>Continue to the next window</span>
+            </label>
+            <span class="cache-note"><span class="nf" aria-hidden="true">󰆼</span> Persistent preview cache · 24 clips</span>
+          </div>
+        </article>
+
+        <div class="rewind-grid">
+          <article class="rewind-player card" aria-busy="false">
+            <div class="card-heading">
+              <div>
+                <p class="card-label amber">Selected recording</p>
+                <strong id="history-title">Choose a segment below</strong>
+              </div>
+              <span id="history-position" class="file-state">— / —</span>
+            </div>
+            <div class="video-stage history-stage">
+              <video id="history-player" controls playsinline preload="metadata"></video>
+              <p id="history-placeholder"><span class="nf stage-icon" aria-hidden="true"></span>Move the day scrubber or choose a recording block to build a browser-playable rewind clip.</p>
+            </div>
+            <div class="player-footer">
+              <div class="transport-controls">
+                <button id="history-previous" class="compact" type="button" disabled><span class="nf" aria-hidden="true"></span> Previous</button>
+                <button id="history-next" class="compact" type="button" disabled>Next <span class="nf" aria-hidden="true"></span></button>
+              </div>
+              <a id="history-download" class="icon-link" href="#" hidden><span class="nf" aria-hidden="true"></span> Download MKV</a>
+            </div>
+          </article>
+
+          <article class="timeline-card card" aria-busy="false">
+            <div class="card-heading">
+              <div>
+                <p class="card-label amber">24-hour timeline</p>
+                <h3 id="history-day-label">Today</h3>
+              </div>
+              <button id="history-today" class="compact amber-button" type="button"><span class="nf" aria-hidden="true"></span> Today</button>
+            </div>
+            <div class="timeline-ruler" aria-hidden="true"><span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></div>
+            <div id="history-timeline" class="timeline-track" role="group" aria-label="Recording segments by time"></div>
+            <p id="history-status" class="muted" aria-live="polite">Loading today’s recording index…</p>
+            <ol id="history-list" class="segment-list" aria-label="Recording segments"></ol>
+          </article>
+        </div>
+      </section>
+
+      <section id="panel-timelapse" class="timelapse section-block tab-panel" role="tabpanel" aria-labelledby="tab-timelapse" aria-busy="false" hidden>
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow violet"><span class="nf" aria-hidden="true">󰔚</span> RESERVED TIMELAPSE STORAGE</p>
+            <h2 id="timelapse-title">Timelapse studio</h2>
+            <p class="section-copy">Manage the camera’s native interval capture and preview the frames collected so far.</p>
+          </div>
+          <div id="timelapse-state" class="status pending violet-status" role="status">Loading schedule</div>
+        </div>
+
+        <div class="timelapse-grid">
+          <article class="progress-card card">
+            <p class="card-label violet">Current schedule</p>
+            <strong id="timelapse-progress-label">—</strong>
+            <progress id="timelapse-progress" max="100" value="0">0%</progress>
+            <div class="progress-meta">
+              <span id="timelapse-captures">— captures</span>
+              <span id="timelapse-dates">—</span>
+            </div>
+            <p id="timelapse-interval" class="muted">Loading capture interval…</p>
+          </article>
+
+          <article class="preview-card card">
+            <div class="card-heading">
+              <div>
+                <p class="card-label violet">Native progress preview</p>
+                <strong id="preview-title">No preview loaded</strong>
+              </div>
+              <button id="preview-latest" class="violet-button" type="button" disabled><span class="nf" aria-hidden="true"></span> Preview latest</button>
+            </div>
+            <div class="video-stage preview-stage">
+              <video id="timelapse-preview" controls playsinline preload="metadata"></video>
+              <p id="preview-placeholder"><span class="nf stage-icon" aria-hidden="true">󰔚</span>Build an accelerated MP4 from every native timelapse frame captured so far.</p>
+            </div>
+            <div class="player-footer">
+              <p id="preview-status" class="muted" aria-live="polite">Previewing does not change the camera or its active schedule.</p>
+              <div class="preview-actions">
+                <label class="playback-speed" for="timelapse-speed">
+                  <span>Speed</span>
+                  <select id="timelapse-speed">
+                    <option value="0.1">0.1×</option>
+                    <option value="0.25">0.25×</option>
+                    <option value="0.5">0.5×</option>
+                    <option value="1" selected>1×</option>
+                    <option value="2">2×</option>
+                  </select>
+                </label>
+                <a id="save-preview" class="icon-link violet-link" href="#" hidden><span class="nf" aria-hidden="true"></span> Save preview</a>
+              </div>
+            </div>
+          </article>
+        </div>
+
+        <div class="timelapse-lower">
+          <form id="timelapse-form" class="settings-card card">
+            <div class="card-heading">
+              <div>
+                <p class="card-label"><span class="nf" aria-hidden="true"></span> Camera schedule</p>
+                <h3>Capture settings</h3>
+              </div>
+              <label class="toggle">
+                <input id="timelapse-enabled" name="enabled" type="checkbox" />
+                <span>Enabled</span>
+              </label>
+            </div>
+
+            <div class="form-grid">
+              <label>
+                Interval (seconds)
+                <input id="timelapse-interval-seconds" name="intervalSeconds" type="number" min="1" max="86400" required />
+                <small>Firmware range: 1 second to 24 hours.</small>
+              </label>
+              <label>
+                Start
+                <input id="timelapse-start" name="startTime" type="datetime-local" step="1" required />
+              </label>
+              <label>
+                End
+                <input id="timelapse-end" name="endTime" type="datetime-local" step="1" required />
+              </label>
+              <fieldset>
+                <legend>Daily capture window</legend>
+                <div class="time-range">
+                  <label>From<input id="timelapse-daily-start" name="dailyStart" type="time" step="1" required /></label>
+                  <span aria-hidden="true">→</span>
+                  <label>To<input id="timelapse-daily-end" name="dailyEnd" type="time" step="1" required /></label>
+                </div>
+              </fieldset>
+            </div>
+
+            <div class="form-actions">
+              <p id="settings-status" class="muted" aria-live="polite">Changes require a review before they reach the camera.</p>
+              <button id="review-settings" type="submit"><span class="nf" aria-hidden="true"></span> Review changes</button>
+            </div>
+          </form>
+
+          <article class="timelapse-files card">
+            <div class="card-heading">
+              <div>
+                <p class="card-label violet"><span class="nf" aria-hidden="true"></span> TIMELAPSE INDEX</p>
+                <h3>Camera files</h3>
+              </div>
+              <button id="refresh-timelapse" class="compact" type="button"><span class="nf" aria-hidden="true"></span> Refresh</button>
+            </div>
+            <p id="timelapse-file-status" class="muted">Loading timelapse recordings…</p>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Status</th><th>Captured through</th><th>Size</th><th>Actions</th></tr></thead>
+                <tbody id="timelapse-list"></tbody>
+              </table>
+            </div>
+          </article>
+        </div>
+      </section>
+    </main>
+
+    <dialog id="confirm-dialog">
+      <form method="dialog" class="dialog-card">
+        <p class="eyebrow"><span class="nf" aria-hidden="true"></span> CONFIRM CAMERA CHANGE</p>
+        <h2>Apply this schedule?</h2>
+        <p class="dialog-warning">Changing an active schedule may close its current timelapse file and begin a new one.</p>
+        <dl id="change-summary"></dl>
+        <div class="dialog-actions">
+          <button value="cancel" type="submit">Cancel</button>
+          <button id="apply-settings" value="default" type="button"><span class="nf" aria-hidden="true"></span> Apply to camera</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>
