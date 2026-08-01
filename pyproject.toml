@@ -48,7 +48,7 @@ where = ["src"]
 growcam = ["py.typed", "static/*.css", "static/*.html", "static/*.js", "static/*.svg"]
 
 [tool.ruff]
-required-version = "==0.15.20"
+required-version = "==0.16.0"
 target-version = "py311"
 line-length = 120
 src = ["src", "tests"]
@@ -73,6 +73,7 @@ select = ["ALL"]
 ignore = [
   "ANN401", # Protocol and decoded-JSON boundaries are intentionally dynamic.
   "COM812", # Conflicts with the formatter.
+  "CPY001", # The repository-wide MIT license avoids repetitive per-file banners.
   "D203",   # Prefer no blank line before a class docstring.
   "D213",   # Prefer summary on the first docstring line.
   "EM101",  # Boundary exceptions deliberately carry inline operational detail.
