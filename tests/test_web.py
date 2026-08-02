@@ -1,25 +1,27 @@
 """Unit tests for safe browser download naming."""
 
-# pyright: reportPrivateUsage=false
+from __future__ import annotations
 
+# pyright: reportPrivateUsage=false
 import errno
 import http.client
+import json
 import threading
 from datetime import datetime
 from http import HTTPStatus
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
+from urllib.parse import urlencode
 
 import pytest
-
-if TYPE_CHECKING:
-    from io import BufferedIOBase
+from typing_extensions import override
 
 from growcam import web
 from growcam.web import (
     GrowCamHTTPServer,
     WebConfig,
     WebRequestError,
+    _browser_files,
     _byte_range,
     _download_name,
     _file_length_bytes,
@@ -30,6 +32,12 @@ from growcam.web import (
     _write_preview_chunk,
     serve,
 )
+
+if TYPE_CHECKING:
+    from datetime import tzinfo
+    from io import BufferedIOBase
+    from types import TracebackType
+    from typing import Self
 
 
 def test_download_name_uses_recording_timestamp_only() -> None:
@@ -46,6 +54,35 @@ def test_timelapse_download_name_identifies_the_recording_type() -> None:
     camera_file = "/idea0/2026-07-31/001/01.45.29-12.29.09[E][@8c][12]._h264"
 
     assert _download_name(camera_file) == "growcam-timelapse-2026-07-31_01-45-29_12-29-09.mkv"
+
+
+def test_file_view_merges_indexes_and_guards_active_downloads() -> None:
+    recording = {
+        "BeginTime": "2026-08-02 12:00:00",
+        "EndTime": "2026-08-02 12:10:00",
+        "FileName": "/idea0/2026-08-02/001/12.00.00-12.10.00[R][0].h264",
+        "FileLength": "0x400",
+    }
+    timelapse = {
+        "BeginTime": "2026-08-02 14:00:00",
+        "EndTime": "2026-08-02 14:30:00",
+        "FileName": "/idea0/2026-08-02/001/14.00.00-14.30.00[E][0]._h264",
+        "FileLength": "0x800",
+    }
+
+    files = _browser_files(
+        [recording, {**recording, "FileLength": "0x800"}],
+        [timelapse],
+        active_recording_filename="",
+        active_timelapse_filename=timelapse["FileName"],
+    )
+
+    assert [item["kind"] for item in files] == ["timelapse", "recording"]
+    assert files[0]["active"] is True
+    assert files[0]["downloadable"] is False
+    assert files[0]["downloadName"] == "growcam-timelapse-2026-08-02_14-00-00_14-30-00.mkv"
+    assert files[1]["downloadable"] is True
+    assert files[1]["sizeBytes"] == 2 * 1024**2
 
 
 def test_camera_hex_file_length_is_kibibytes() -> None:
@@ -227,6 +264,187 @@ def test_static_responses_have_browser_security_headers(
         assert response.getheader("X-Frame-Options") == "DENY"
         assert response.getheader("Referrer-Policy") == "no-referrer"
         assert "default-src 'self'" in (response.getheader("Content-Security-Policy") or "")
+    finally:
+        connection.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_files_route_returns_the_selected_camera_index(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    payload: dict[str, object] = {
+        "date": "2026-08-02",
+        "files": [],
+        "summary": {"count": 0, "recordings": 0, "timelapses": 0, "sizeBytes": 0},
+    }
+
+    def selected_files(_handler: web.GrowCamHandler, requested_date: str) -> dict[str, object]:
+        assert requested_date == "2026-08-02"
+        return payload
+
+    monkeypatch.setattr(web, "_preview_cache_directory", lambda: tmp_path)
+    monkeypatch.setattr(web.GrowCamHandler, "_files", selected_files)
+    server = GrowCamHTTPServer(("127.0.0.1", 0), WebConfig("192.0.2.1"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+    try:
+        connection.request("GET", "/api/files?date=2026-08-02")
+        response = connection.getresponse()
+
+        assert response.status == HTTPStatus.OK
+        assert json.loads(response.read()) == payload
+    finally:
+        connection.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_files_route_queries_both_camera_partitions(  # noqa: C901 - integration fixture covers both indexes.
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class FixedDateTime(datetime):
+        @classmethod
+        @override
+        def now(cls, tz: tzinfo | None = None) -> FixedDateTime:
+            assert tz is None
+            return cls(2026, 8, 2, 15, 0)
+
+    class FileIndexCamera:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(
+            self,
+            _exc_type: type[BaseException] | None,
+            _exc: BaseException | None,
+            _traceback: TracebackType | None,
+        ) -> None:
+            return None
+
+        def recordings(
+            self,
+            *,
+            start: datetime,
+            end: datetime,
+            channel: int,
+            event: str,
+        ) -> list[dict[str, object]]:
+            assert channel == 0
+            if event == "R":
+                if start == datetime(2026, 8, 1):
+                    assert end == datetime(2026, 8, 2)
+                    return []
+                assert start == datetime(2026, 8, 2)
+                assert end == datetime(2026, 8, 2, 15)
+                return [
+                    {
+                        "BeginTime": "2026-08-02 12:00:00",
+                        "EndTime": "2026-08-02 12:10:00",
+                        "FileName": "/idea0/2026-08-02/001/12.00.00-12.10.00[R][0].h264",
+                        "FileLength": "0x400",
+                    },
+                    {
+                        "BeginTime": "2026-08-02 14:30:00",
+                        "EndTime": "2026-08-02 15:00:00",
+                        "FileName": "/idea0/2026-08-02/001/14.30.00-15.00.00[R][0].h264",
+                        "FileLength": "0x800",
+                    },
+                ]
+            assert event == "E"
+            if start == datetime(2026, 8, 2):
+                assert end == datetime(2026, 8, 2, 15)
+                return [
+                    {
+                        "BeginTime": "2026-08-02 13:00:00",
+                        "EndTime": "2026-08-02 14:00:00",
+                        "FileName": "/idea0/2026-08-02/001/13.00.00-14.00.00[E][0]._h264",
+                        "FileLength": "0x200",
+                    }
+                ]
+            if start == datetime(2026, 8, 1):
+                assert end == datetime(2026, 8, 2)
+            else:
+                assert start == datetime(2026, 7, 31, 8)
+                assert end == datetime(2026, 8, 2, 15)
+            return [
+                {
+                    "BeginTime": "2026-08-01 08:00:00",
+                    "EndTime": "2026-08-02 15:00:00",
+                    "FileName": "/idea0/2026-08-01/001/08.00.00-15.00.00[E][0]._h264",
+                    "FileLength": "0x300",
+                }
+            ]
+
+        def config_get(self, name: str) -> object:
+            assert name == "Storage.EpitomeRecord"
+            return [
+                {
+                    "Enable": True,
+                    "EndTime": "2026-08-03 18:00:00",
+                    "Interval": 300,
+                    "StartTime": "2026-08-01 08:00:00",
+                    "TimeSection": [
+                        "1 08:00:00-18:00:00",
+                        "0 00:00:00-23:59:59",
+                        "0 00:00:00-23:59:59",
+                        "0 00:00:00-23:59:59",
+                        "0 00:00:00-23:59:59",
+                        "0 00:00:00-23:59:59",
+                    ],
+                }
+            ]
+
+    camera = FileIndexCamera()
+
+    def open_camera(_handler: web.GrowCamHandler) -> FileIndexCamera:
+        return camera
+
+    monkeypatch.setattr(web, "datetime", FixedDateTime)
+    monkeypatch.setattr(web, "_preview_cache_directory", lambda: tmp_path)
+    monkeypatch.setattr(web.GrowCamHandler, "_camera", open_camera)
+    server = GrowCamHTTPServer(("127.0.0.1", 0), WebConfig("192.0.2.1"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+    try:
+        connection.request("GET", "/api/files?date=2026-08-02")
+        response = connection.getresponse()
+        payload = json.loads(response.read())
+
+        assert response.status == HTTPStatus.OK
+        assert payload["summary"] == {"count": 3, "recordings": 2, "timelapses": 1, "sizeBytes": 3670016}
+        assert [item["kind"] for item in payload["files"]] == ["recording", "timelapse", "recording"]
+        assert [item["downloadable"] for item in payload["files"]] == [False, True, True]
+
+        active_file = payload["files"][0]["fileName"]
+        connection.request("GET", f"/api/download?{urlencode({'file': active_file})}")
+        active_response = connection.getresponse()
+        active_payload = json.loads(active_response.read())
+
+        assert active_response.status == HTTPStatus.CONFLICT
+        assert active_payload["error"] == (
+            "An active camera file can be previewed; its final download is available after completion"
+        )
+
+        connection.request("GET", "/api/files?date=2026-08-01")
+        historical_response = connection.getresponse()
+        historical_payload = json.loads(historical_response.read())
+
+        assert historical_response.status == HTTPStatus.OK
+        assert historical_payload["summary"] == {
+            "count": 1,
+            "recordings": 0,
+            "timelapses": 1,
+            "sizeBytes": 768 * 1024,
+        }
+        assert historical_payload["files"][0]["active"] is True
+        assert historical_payload["files"][0]["downloadable"] is False
     finally:
         connection.close()
         server.shutdown()

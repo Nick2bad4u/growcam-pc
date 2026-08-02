@@ -5,6 +5,34 @@ All notable changes to GrowCam PC are documented here. The project follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-02
+
+### Added
+
+- Add a Files dashboard that combines ordinary recordings and the reserved
+  time-lapse partition for a selected date, with filtering, sorting, previews,
+  and safe downloads of completed files.
+- Add strict branch coverage, Codecov coverage and JUnit uploads, distribution
+  smoke tests, and documentation checks to the cross-platform CI matrix.
+- Add a private npm toolchain for repository checks, git-cliff release notes,
+  Lychee link validation, and a Docusaurus documentation site deployed through
+  GitHub Pages.
+- Add PyPI Trusted Publishing to tagged releases while retaining verified
+  GitHub release artifacts.
+
+### Changed
+
+- Reorganize the dashboard into Live, Rewind, Time-lapse, and Files tabs with
+  shorter labels, clearer state colors, and Nerd Font-enhanced icons that keep
+  readable text fallbacks.
+- Expand strict tests around CLI behavior, media commands, camera file indexes,
+  active-file safeguards, and route dispatch.
+
+### Fixed
+
+- Avoid touching uninitialized media-cache state when a second web server
+  cannot bind to an address already in use.
+
 ## [0.2.0] - 2026-08-02
 
 ### Changed
@@ -51,4 +79,5 @@ All notable changes to GrowCam PC are documented here. The project follows
 
 [0.1.0]: https://github.com/Nick2bad4u/growcam-pc/releases/tag/v0.1.0
 [0.2.0]: https://github.com/Nick2bad4u/growcam-pc/compare/v0.1.0...v0.2.0
-[Unreleased]: https://github.com/Nick2bad4u/growcam-pc/compare/v0.2.0...HEAD
+[0.3.0]: https://github.com/Nick2bad4u/growcam-pc/compare/v0.2.0...v0.3.0
+[Unreleased]: https://github.com/Nick2bad4u/growcam-pc/compare/v0.3.0...HEAD

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "growcam-pc"
-version = "0.2.0"
+version = "0.3.0"
 description = "Local PC access tools for VIVOSUN GrowCam cameras"
 readme = "README.md"
 license = "MIT"
@@ -17,16 +17,22 @@ classifiers = [
   "Environment :: Console",
   "Environment :: Web Environment",
   "Operating System :: OS Independent",
+  "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
   "Topic :: Multimedia :: Video",
+  "Typing :: Typed",
 ]
 
 [project.urls]
 Homepage = "https://github.com/Nick2bad4u/growcam-pc"
+Changelog = "https://github.com/Nick2bad4u/growcam-pc/blob/main/CHANGELOG.md"
+Documentation = "https://nick2bad4u.github.io/growcam-pc/"
 Issues = "https://github.com/Nick2bad4u/growcam-pc/issues"
 Repository = "https://github.com/Nick2bad4u/growcam-pc"
 
@@ -35,7 +41,9 @@ dev = [
   "mypy==2.3.0",
   "pyright==1.1.411",
   "pytest==9.1.1",
+  "pytest-cov==7.1.0",
   "ruff==0.16.0",
+  "twine==7.0.0",
 ]
 
 [project.scripts]
@@ -158,6 +166,24 @@ reportUnnecessaryTypeIgnoreComment = true
 minversion = "9.1"
 addopts = ["--strict-config", "--strict-markers", "--import-mode=importlib", "-ra"]
 filterwarnings = ["error"]
+junit_family = "legacy"
 testpaths = ["tests"]
 pythonpath = ["src"]
 cache_dir = ".cache/.pytest_cache"
+
+[tool.coverage.run]
+branch = true
+relative_files = true
+source = ["growcam"]
+
+[tool.coverage.paths]
+source = ["src/growcam", "*/site-packages/growcam"]
+
+[tool.coverage.report]
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError"]
+fail_under = 60
+precision = 2
+show_missing = true
+
+[tool.coverage.xml]
+output = "coverage/python/coverage.xml"

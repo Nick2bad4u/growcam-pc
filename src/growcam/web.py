@@ -171,7 +171,7 @@ class GrowCamHandler(BaseHTTPRequestHandler):
         self.send_header("X-Frame-Options", "DENY")
         super().end_headers()
 
-    def do_GET(self) -> None:  # noqa: C901, PLR0912 - explicit route dispatch is clearer here.
+    def do_GET(self) -> None:  # noqa: C901, PLR0912, PLR0915 - explicit route dispatch is clearer here.
         """Route one HTTP GET request."""
         request = urlparse(self.path)
         try:
@@ -192,6 +192,9 @@ class GrowCamHandler(BaseHTTPRequestHandler):
             elif request.path == "/api/history":
                 query = parse_qs(request.query)
                 self._json(self._history(query.get("date", [""])[0]))
+            elif request.path == "/api/files":
+                query = parse_qs(request.query)
+                self._json(self._files(query.get("date", [""])[0]))
             elif request.path == "/api/history/preview":
                 query = parse_qs(request.query)
                 camera_file = query.get("file", [""])[0]
@@ -312,6 +315,49 @@ class GrowCamHandler(BaseHTTPRequestHandler):
             "recordings": browser_recordings,
         }
 
+    def _files(self, requested_date: str) -> dict[str, object]:
+        selected_date = _history_date(requested_date)
+        day_start = datetime.combine(selected_date, time.min)
+        now = datetime.now()
+        day_end = min(day_start + timedelta(days=1), now)
+        continuous: list[dict[str, Any]] = []
+        timelapses: list[dict[str, Any]] = []
+        active_timelapse_filename = ""
+        if day_end > day_start:
+            with self._camera() as camera:
+                continuous = camera.recordings(
+                    start=day_start,
+                    end=day_end,
+                    channel=0,
+                    event="R",
+                )
+                timelapses = camera.recordings(
+                    start=day_start,
+                    end=day_end,
+                    channel=0,
+                    event="E",
+                )
+                if timelapses:
+                    config = TimelapseConfig.from_camera(camera.config_get(TIMELAPSE_CONFIG_NAME))
+                    _current_timelapses, active_timelapse_filename = _timelapse_index(camera, config, now)
+        browser_files = _browser_files(
+            continuous,
+            timelapses,
+            active_recording_filename=_active_history_filename(continuous, selected_date, now),
+            active_timelapse_filename=active_timelapse_filename,
+        )
+        cast("GrowCamHTTPServer", self.server).remember_recordings(browser_files)
+        return {
+            "date": selected_date.isoformat(),
+            "files": browser_files,
+            "summary": {
+                "count": len(browser_files),
+                "recordings": len(continuous),
+                "timelapses": len(timelapses),
+                "sizeBytes": sum(cast("int", item["sizeBytes"]) for item in browser_files),
+            },
+        }
+
     def _timelapse_state(self) -> dict[str, object]:
         with self._camera() as camera:
             state = _timelapse_state(camera, now=datetime.now())
@@ -341,25 +387,35 @@ class GrowCamHandler(BaseHTTPRequestHandler):
         server = cast("GrowCamHTTPServer", self.server)
         _claim_camera_operation(server)
         try:
-            timelapse_record: dict[str, object] | None = None
+            record: dict[str, object]
             if match.group("event") == "E":
-                state = self._timelapse_state()
-                timelapse_record = _matching_recording(state, camera_file)
-                if cast("bool", timelapse_record["active"]):
-                    raise WebRequestError(
-                        HTTPStatus.CONFLICT,
-                        "The active timelapse must be previewed; its final download is available after completion",
-                    )
+                record = _matching_recording(self._timelapse_state(), camera_file)
+            else:
+                cached_record = server.cached_recording(camera_file)
+                if cached_record is None:
+                    selected_date = date.fromisoformat(match.group("date"))
+                    day_start = datetime.combine(selected_date, time.min)
+                    day_end = min(day_start + timedelta(days=1), datetime.now())
+                    if day_end <= day_start:
+                        raise WebRequestError(HTTPStatus.NOT_FOUND, "No recording exists for that future date")
+                    record = self._history_recording(camera_file, selected_date, day_start, day_end)
+                else:
+                    record = cached_record
+            if cast("bool", record["active"]):
+                raise WebRequestError(
+                    HTTPStatus.CONFLICT,
+                    "An active camera file can be previewed; its final download is available after completion",
+                )
             with TemporaryDirectory(prefix="growcam-") as temporary_directory:
                 raw = Path(temporary_directory) / "camera.raw-hevc"
                 playable = Path(temporary_directory) / "recording.mkv"
                 with self._camera() as camera:
-                    if timelapse_record is None:
+                    if match.group("event") == "R":
                         _ = camera.download(camera_file, raw)
                     else:
                         _ = camera.playback_by_time_snapshot(
-                            start=_camera_datetime(timelapse_record["beginTime"]),
-                            end=_camera_datetime(timelapse_record["endTime"]),
+                            start=_camera_datetime(record["beginTime"]),
+                            end=_camera_datetime(record["endTime"]),
                             destination=raw,
                             file_type=5,
                         )
@@ -696,15 +752,32 @@ def serve(
 
 def _timelapse_state(camera: DVRIPClient, *, now: datetime) -> dict[str, object]:
     config = TimelapseConfig.from_camera(camera.config_get(TIMELAPSE_CONFIG_NAME))
-    search_start = min(config.start_time, now) - timedelta(days=1)
-    recordings = camera.recordings(start=search_start, end=now, channel=0, event="E")
-    active_filename = ""
-    if config.enabled and config.start_time <= now < config.end_time and recordings:
-        active_filename = str(recordings[-1].get("FileName", ""))
+    recordings, active_filename = _timelapse_index(camera, config, now)
     return {
         "config": config.to_api(now=now),
         "recordings": list(reversed(_browser_recordings(recordings, active_filename=active_filename))),
     }
+
+
+def _timelapse_index(
+    camera: DVRIPClient,
+    config: TimelapseConfig,
+    now: datetime,
+) -> tuple[list[dict[str, Any]], str]:
+    """Return the current schedule index and its active camera filename."""
+    search_start = min(config.start_time, now) - timedelta(days=1)
+    recordings = camera.recordings(start=search_start, end=now, channel=0, event="E")
+    return recordings, _active_timelapse_filename(config, recordings, now)
+
+
+def _active_timelapse_filename(
+    config: TimelapseConfig,
+    recordings: list[dict[str, Any]],
+    now: datetime,
+) -> str:
+    if config.enabled and config.start_time <= now < config.end_time and recordings:
+        return str(recordings[-1].get("FileName", ""))
+    return ""
 
 
 def _timelapse_update_request(payload: dict[str, object]) -> tuple[str, TimelapseConfig]:
@@ -741,18 +814,54 @@ def _browser_recordings(
     active_filename: str,
 ) -> list[dict[str, object]]:
     browser_records: list[dict[str, object]] = []
+    filename_indexes: dict[str, int] = {}
     for item in recordings:
         filename = str(item.get("FileName", ""))
-        browser_records.append(
-            {
-                "beginTime": str(item.get("BeginTime", "")),
-                "endTime": str(item.get("EndTime", "")),
-                "fileName": filename,
-                "sizeBytes": _file_length_bytes(item.get("FileLength")),
-                "active": filename == active_filename,
-            }
-        )
+        record: dict[str, object] = {
+            "beginTime": str(item.get("BeginTime", "")),
+            "endTime": str(item.get("EndTime", "")),
+            "fileName": filename,
+            "sizeBytes": _file_length_bytes(item.get("FileLength")),
+            "active": filename == active_filename,
+        }
+        duplicate_index = filename_indexes.get(filename) if filename else None
+        if duplicate_index is None:
+            if filename:
+                filename_indexes[filename] = len(browser_records)
+            browser_records.append(record)
+        else:
+            browser_records[duplicate_index] = record
     return browser_records
+
+
+def _browser_files(
+    recordings: list[dict[str, Any]],
+    timelapses: list[dict[str, Any]],
+    *,
+    active_recording_filename: str,
+    active_timelapse_filename: str,
+) -> list[dict[str, object]]:
+    files = [
+        _file_view_record(record, kind="recording")
+        for record in _browser_recordings(recordings, active_filename=active_recording_filename)
+    ]
+    files.extend(
+        _file_view_record(record, kind="timelapse")
+        for record in _browser_recordings(timelapses, active_filename=active_timelapse_filename)
+    )
+    files.sort(key=lambda record: cast("str", record["beginTime"]), reverse=True)
+    return files
+
+
+def _file_view_record(record: dict[str, object], *, kind: str) -> dict[str, object]:
+    filename = cast("str", record["fileName"])
+    active = cast("bool", record["active"])
+    return {
+        **record,
+        "kind": kind,
+        "downloadName": _download_name(filename),
+        "downloadable": not active,
+    }
 
 
 def _active_history_filename(

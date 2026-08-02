@@ -1,13 +1,13 @@
 # GrowCam PC
 
-[![CI](https://github.com/Nick2bad4u/growcam-pc/actions/workflows/ci.yml/badge.svg)](https://github.com/Nick2bad4u/growcam-pc/actions/workflows/ci.yml)
-[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776ab?logo=python&logoColor=white)](https://www.python.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-8ff5ad.svg)](LICENSE)
+[![CI](https://github.com/Nick2bad4u/growcam-pc/actions/workflows/ci.yml/badge.svg)](https://github.com/Nick2bad4u/growcam-pc/actions/workflows/ci.yml) [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776ab?logo=python&logoColor=white)](https://www.python.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-8ff5ad.svg)](LICENSE) [![Latest GitHub release.](https://flat.badgen.net/github/release/Nick2bad4u/growcam-pc?color=cyan)](https://github.com/Nick2bad4u/growcam-pc/releases) [![GitHub stars.](https://flat.badgen.net/github/stars/Nick2bad4u/growcam-pc?color=yellow)](https://github.com/Nick2bad4u/growcam-pc/stargazers) [![GitHub forks.](https://flat.badgen.net/github/forks/Nick2bad4u/growcam-pc?color=orange)](https://github.com/Nick2bad4u/growcam-pc/forks) [![GitHub open issues.](https://flat.badgen.net/github/open-issues/Nick2bad4u/growcam-pc?color=red)](https://github.com/Nick2bad4u/growcam-pc/issues) [![Codecov.](https://flat.badgen.net/codecov/github/Nick2bad4u/growcam-pc?color=blue)](https://codecov.io/gh/Nick2bad4u/growcam-pc) [![Repo Checks.](https://flat.badgen.net/github/checks/nick2bad4u/growcam-pc?color=green)](https://github.com/Nick2bad4u/growcam-pc/actions)
 
-A private, local-first desktop dashboard for VIVOSUN GrowCam cameras. GrowCam
+A private, local-first desktop dashboard for VIVOSUN GrowCam cameras. The
+[documentation site](https://nick2bad4u.github.io/growcam-pc/) covers setup,
+dashboard use, commands, troubleshooting, and security. GrowCam
 PC talks directly to the camera's RTSP and DVRIP services—no vendor cloud or
 mobile app is needed for live video, device status, microSD recordings, daily
-rewind, or native timelapse progress.
+rewind, or native time-lapse progress.
 
 The project was developed against a VIVOSUN GrowCam C4 (`B0D8PQQWM3`). Other
 XMEye/DVRIP cameras may expose similar services, but are not yet verified.
@@ -18,10 +18,12 @@ XMEye/DVRIP cameras may expose similar services, but are not yet verified.
 - A 24-hour daily viewer assembled from the camera's recording blocks.
 - Two-minute, five-minute, and full-block rewind previews with automatic
   continuation through adjacent footage.
-- Native timelapse schedule, progress, reserved-partition file index, guarded
+- Native time-lapse schedule, progress, reserved-partition file index, guarded
   schedule editing, and an accelerated preview of every captured frame so far.
 - Persistent, bounded preview caching so repeat playback starts quickly—even
   after GrowCam PC restarts.
+- A date-based Files browser for ordinary recordings and the reserved
+  time-lapse partition, with filtering, preview actions, and safe downloads.
 - Direct recording downloads, live clips, and command-line camera diagnostics.
 - Localhost-only defaults, cross-origin write protection, and explicit consent
   before exposing the unauthenticated dashboard to a network.
@@ -33,11 +35,14 @@ You need [Python 3.11 or newer](https://www.python.org/downloads/),
 [uv](https://docs.astral.sh/uv/getting-started/installation/), and
 [FFmpeg](https://ffmpeg.org/download.html) on `PATH`.
 
-Install the latest GitHub version as an isolated command-line tool:
+Install the published package as an isolated command-line tool:
 
 ```shell
-uv tool install git+https://github.com/Nick2bad4u/growcam-pc
+uv tool install growcam-pc
 ```
+
+`pipx install growcam-pc` is an equivalent isolated installation. To test an
+unreleased commit, pass the repository URL to `uv tool install` instead.
 
 Start the dashboard with your camera's LAN address:
 
@@ -96,14 +101,14 @@ available when you need more context. Enable **Continue to the next window** to
 move through adjacent footage automatically. Real gaps are shown rather than
 silently jumping to unrelated video.
 
-### Timelapse studio
+### Time-lapse studio
 
-The camera keeps native timelapse data on a separately reserved formatted
+The camera keeps native time-lapse data on a separately reserved formatted
 partition. That is why the ordinary recording partition reports less than the
 microSD card's full capacity. GrowCam PC queries both indexes and labels them
 separately.
 
-The Timelapse tab reads the firmware's `Storage.EpitomeRecord` configuration
+The Time-lapse tab reads the firmware's `Storage.EpitomeRecord` configuration
 and exposes its enabled state, interval, date range, daily capture window, and
 estimated progress. Schedule writes are guarded:
 
@@ -116,6 +121,15 @@ estimated progress. Schedule writes are guarded:
 Changing an active schedule may close the current camera file and begin a new
 one. Previewing is read-only and does not interrupt capture.
 
+### Files
+
+The Files tab queries a selected date across both camera indexes, then combines
+ordinary recordings and native time-lapse files in one sortable table. Filter
+by name or path, restrict the result to one media type, preview compatible
+entries in their native dashboard player, or download completed camera files.
+An active file remains previewable but is not offered as a download until the
+camera closes it, which avoids presenting a truncated archive as complete.
+
 ## How progressive previews work
 
 The camera stores native HEVC rather than a ready-made browser video. GrowCam
@@ -125,9 +139,9 @@ the remaining camera data is still transferring. Leaving or replacing a preview
 cancels that camera operation immediately instead of making the next selection
 wait behind abandoned work.
 
-A cold timelapse preview can still take several seconds to show its first frame,
-and transferring the complete growing file takes longer in the background. Cold
-timelapses are paced at 2 fps so the player does not outrun the camera's stored
+A cold time-lapse preview must decode camera data before it can show its first
+frame, and transferring the complete growing file takes longer in the background. Cold
+time-lapses are paced at 2 fps, so the player does not outrun the camera's stored
 frame transfer. Once the transfer completes, GrowCam PC losslessly retimes that
 cache to 25 fps and writes a fast-start MP4 index for normal accelerated replay.
 Daily Rewind's two- and five-minute windows normally start fastest; full-block
@@ -136,8 +150,8 @@ timestamp below each player identifies the real-world period covered even when
 the resulting video is accelerated or the camera used an adaptive recording
 rate.
 
-Completed previews support HTTP byte ranges and carry a complete MP4 seek index,
-so replay and arbitrary seeking do not require reading the file from the start.
+Completed previews support HTTP byte ranges and carry a complete MP4 seek index.
+Replay and arbitrary seeking therefore do not require reading the file from the start.
 An active file gets a new cache key when its camera-reported size changes,
 ensuring a later preview
 includes newly captured frames rather than stale output. Interrupted generated
@@ -160,8 +174,6 @@ Preview cache locations:
 | Linux | `$XDG_CACHE_HOME/growcam/preview-cache` or `~/.cache/growcam/preview-cache` |
 
 The cache keeps the 24 most recently used MP4 previews.
-
-[funsdk-media]: https://github.com/xmeye/openplatform-docs/blob/7db946442bb3254402f9f20e16baba97a85e4b56/docs/en/FunSDKAndroidInterfacedescription-mediafunctionmethod.md
 
 ## Other commands
 
@@ -247,15 +259,19 @@ firewall. See [SECURITY.md](SECURITY.md) for private vulnerability reporting.
 
 ```shell
 uv sync --all-groups
-uv run ruff format --check .
-uv run ruff check .
-uv run mypy
-uv run pyright
-uv run pytest
-uv run python -m compileall -q src tests
-uv build
+npm install
+npm run release:verify
 ```
+
+`release:verify` runs formatting, Ruff, strict mypy, strict Pyright, branch-aware
+pytest coverage, bytecode compilation, distribution validation, the Docusaurus
+production build, and an offline git-cliff preview. Use `npm run docs:start` for
+the local documentation server. The private `package.json` exists only to
+orchestrate repository checks and documentation; it is not part of the Python
+runtime package.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for pull request guidance and
 [CHANGELOG.md](CHANGELOG.md) for release history. GrowCam PC is available under
 the [MIT License](LICENSE).
+
+[funsdk-media]: https://github.com/xmeye/openplatform-docs/blob/7db946442bb3254402f9f20e16baba97a85e4b56/docs/en/FunSDKAndroidInterfacedescription-mediafunctionmethod.md

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="GrowCam PC">
+  <defs>
+    <linearGradient id="body" x1="8" y1="7" x2="55" y2="58" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#65e7ff"/>
+      <stop offset="1" stop-color="#6edd8f"/>
+    </linearGradient>
+  </defs>
+  <rect x="5" y="9" width="54" height="42" rx="12" fill="#071418" stroke="url(#body)" stroke-width="3"/>
+  <circle cx="32" cy="30" r="12" fill="#0c2428" stroke="#65e7ff" stroke-width="3"/>
+  <circle cx="32" cy="30" r="5" fill="#8ff5ad"/>
+  <path d="M22 55h20" stroke="#8ff5ad" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="50" cy="18" r="3" fill="#ff7d85"/>
+</svg>

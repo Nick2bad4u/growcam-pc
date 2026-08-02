@@ -12,6 +12,7 @@ const tabButtons = [...document.querySelectorAll(".app-tab")];
 
 let timelapseData = null;
 let historyData = null;
+let filesData = null;
 let selectedHistoryIndex = -1;
 let selectedHistorySeconds = null;
 let historyPlaybackStartSeconds = null;
@@ -23,6 +24,7 @@ let historyRequest = null;
 let appReady = false;
 let historyLoaded = false;
 let timelapseLoaded = false;
+let filesLoaded = false;
 
 function hexKibibytes(value) {
   return typeof value === "string" && value.startsWith("0x") ? Number.parseInt(value, 16) : 0;
@@ -45,6 +47,15 @@ function formatDuration(seconds) {
   if (!Number.isFinite(seconds) || seconds <= 0) return "accelerated";
   if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)}-second`;
   return `${(seconds / 60).toFixed(1)}-minute`;
+}
+
+function formatFileDuration(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return "—";
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.round((seconds % 3600) / 60);
+  return `${hours}h ${minutes}m`;
 }
 
 function cameraDate(value) {
@@ -238,14 +249,14 @@ function activateTab(name, focus = false, reveal = false) {
 function setLiveFeedActive(active) {
   if (active) {
     if (!liveFeed.hasAttribute("src")) {
-      liveMessage.textContent = "Starting the live camera feed…";
+      liveMessage.textContent = "Starting live video…";
       livePlaceholder.hidden = false;
       liveFeed.src = liveFeed.dataset.src;
     }
     return;
   }
   liveFeed.removeAttribute("src");
-  liveMessage.textContent = "Live feed paused while another view is open.";
+  liveMessage.textContent = "Live video paused.";
   livePlaceholder.hidden = false;
 }
 
@@ -253,12 +264,14 @@ async function ensureTabData(name) {
   try {
     if (name === "rewind" && !historyLoaded) await loadHistory();
     if (name === "timelapse" && !timelapseLoaded) await loadTimelapse();
+    if (name === "files" && !filesLoaded) await loadFiles();
   } catch (error) {
     if (name === "rewind") document.querySelector("#history-status").textContent = errorMessage(error);
     if (name === "timelapse") {
       setStatus(document.querySelector("#timelapse-state"), "Camera unavailable", "error");
       document.querySelector("#timelapse-file-status").textContent = errorMessage(error);
     }
+    if (name === "files") document.querySelector("#files-status").textContent = errorMessage(error);
   }
 }
 
@@ -317,7 +330,7 @@ function renderHistory(payload) {
   });
 
   const status = document.querySelector("#history-status");
-  status.textContent = recordings.length ? `${recordings.length} continuous recording block${recordings.length === 1 ? "" : "s"} available. Scrub to a recorded moment; the 2-minute mode avoids downloading an entire block.` : "No continuous recording blocks were found for this day.";
+  status.textContent = recordings.length ? `${recordings.length} recording block${recordings.length === 1 ? "" : "s"} · choose a time.` : "No recordings found for this day.";
   document.querySelector("#history-position").textContent = `— / ${recordings.length}`;
   document.querySelector("#history-previous").disabled = true;
   document.querySelector("#history-next").disabled = true;
@@ -329,7 +342,7 @@ async function loadHistory() {
   const status = document.querySelector("#history-status");
   const timelineCard = document.querySelector(".timeline-card");
   timelineCard.setAttribute("aria-busy", "true");
-  status.textContent = "Loading the camera’s recording index…";
+  status.textContent = "Loading recordings…";
   try {
     const payload = await getJson(`/api/history?date=${encodeURIComponent(dateInput.value)}`);
     renderHistory(payload);
@@ -345,7 +358,7 @@ function previewScrubberMoment() {
   const index = historyRecordIndexAt(seconds);
   highlightHistorySelection(index);
   const status = document.querySelector("#history-status");
-  status.textContent = index >= 0 ? `Release at ${clockForSeconds(seconds)} to load a ${historyWindowLabel()}.` : `No camera footage covers ${clockForSeconds(seconds)}. Choose a colored part of the timeline.`;
+  status.textContent = index >= 0 ? `Release to open ${clockForSeconds(seconds)}.` : `No footage at ${clockForSeconds(seconds)}.`;
 }
 
 function selectScrubberMoment() {
@@ -364,7 +377,7 @@ function selectScrubberMoment() {
   document.querySelector("#history-position").textContent = `— / ${historyData?.recordings.length || 0}`;
   document.querySelector("#history-previous").disabled = true;
   document.querySelector("#history-next").disabled = true;
-  document.querySelector("#history-status").textContent = `No camera footage covers ${clockForSeconds(seconds)}. Choose a colored part of the timeline.`;
+  document.querySelector("#history-status").textContent = `No footage at ${clockForSeconds(seconds)}.`;
 }
 
 function selectHistorySegment(index, atSeconds = null) {
@@ -383,7 +396,7 @@ function selectHistorySegment(index, atSeconds = null) {
   document.querySelector("#history-next").disabled = index >= recordings.length - 1;
   const download = document.querySelector("#history-download");
   download.href = `/api/download?file=${encodeURIComponent(recording.fileName)}`;
-  download.hidden = false;
+  download.hidden = recording.active;
   buildHistoryPreview(recording, requestedSeconds);
 }
 
@@ -408,14 +421,14 @@ async function buildHistoryPreview(recording, atSeconds) {
   const url = `/api/history/preview?${parameters}`;
   const startedAt = performance.now();
   let playbackStarted = false;
-  status.textContent = `Opening the first decoded frame now; about ${formatSize(estimatedBytes)} continues streaming into the local cache.`;
+  status.textContent = `Streaming about ${formatSize(estimatedBytes)}…`;
   try {
     await loadVideoStream(historyVideo, url, request.signal);
     if (historyRequest !== request) return;
     playbackStarted = true;
     document.querySelector("#history-placeholder").hidden = true;
     await historyVideo.play().catch(() => {});
-    status.textContent = `First frame ready in ${loadTimeLabel(startedAt)}. Completed clips are indexed automatically for instant replay and seeking.`;
+    status.textContent = `Ready in ${loadTimeLabel(startedAt)} · cached when complete.`;
   } catch (error) {
     if (!(error instanceof DOMException && error.name === "AbortError")) status.textContent = errorMessage(error);
   } finally {
@@ -434,7 +447,7 @@ function fillTimelapseForm(config) {
   document.querySelector("#timelapse-daily-start").value = config.dailyStart;
   document.querySelector("#timelapse-daily-end").value = config.dailyEnd;
   formIsDirty = false;
-  document.querySelector("#settings-status").textContent = "Changes require a review before they reach the camera.";
+  document.querySelector("#settings-status").textContent = "Review before applying.";
 }
 
 function renderTimelapse(payload, forceFormRefresh) {
@@ -486,7 +499,7 @@ function renderTimelapseFiles(recordings) {
     row.append(stateCell, throughCell, sizeCell, actionCell);
     tbody.append(row);
   }
-  document.querySelector("#timelapse-file-status").textContent = `${recordings.length} timelapse file${recordings.length === 1 ? "" : "s"} found on the reserved partition.`;
+  document.querySelector("#timelapse-file-status").textContent = `${recordings.length} time-lapse file${recordings.length === 1 ? "" : "s"}.`;
 }
 
 async function loadTimelapse(forceFormRefresh = false) {
@@ -498,6 +511,126 @@ async function loadTimelapse(forceFormRefresh = false) {
     timelapseData = payload;
     timelapseLoaded = true;
     renderTimelapse(payload, forceFormRefresh);
+  } finally {
+    panel.setAttribute("aria-busy", "false");
+  }
+}
+
+function visibleCameraFiles() {
+  const query = document.querySelector("#files-search").value.trim().toLocaleLowerCase();
+  const kind = document.querySelector("#files-kind").value;
+  const sort = document.querySelector("#files-sort").value;
+  const files = [...(filesData?.files || [])].filter((file) => {
+    const matchesKind = kind === "all" || file.kind === kind;
+    const haystack = `${file.fileName} ${file.downloadName} ${file.beginTime} ${file.endTime} ${file.kind}`.toLocaleLowerCase();
+    return matchesKind && (!query || haystack.includes(query));
+  });
+  files.sort((left, right) => {
+    if (sort === "oldest") return cameraDate(left.beginTime) - cameraDate(right.beginTime);
+    if (sort === "largest") return right.sizeBytes - left.sizeBytes;
+    return cameraDate(right.beginTime) - cameraDate(left.beginTime);
+  });
+  return files;
+}
+
+function fileTypeBadge(file) {
+  const badge = document.createElement("span");
+  badge.className = `file-kind ${file.kind}`;
+  const icon = document.createElement("span");
+  icon.className = "nf";
+  icon.setAttribute("aria-hidden", "true");
+  icon.textContent = file.kind === "timelapse" ? "󰔚" : "";
+  const label = document.createElement("span");
+  label.textContent = file.kind === "timelapse" ? "Time-lapse" : "Recording";
+  badge.append(icon, label);
+  return badge;
+}
+
+async function previewCameraFile(file) {
+  const status = document.querySelector("#files-status");
+  status.hidden = false;
+  status.textContent = "Opening preview…";
+  try {
+    if (file.kind === "timelapse") {
+      if (!timelapseLoaded) await loadTimelapse();
+      activateTab("timelapse", false, true);
+      await buildPreview(file);
+      return;
+    }
+    const historyDate = file.beginTime.slice(0, 10);
+    document.querySelector("#history-date").value = historyDate;
+    historyLoaded = false;
+    await loadHistory();
+    const index = historyData?.recordings.findIndex((item) => item.fileName === file.fileName) ?? -1;
+    if (index < 0) throw new Error("This recording is no longer present in the camera index.");
+    activateTab("rewind", false, true);
+    selectHistorySegment(index, recordingBounds(historyData.recordings[index]).start);
+  } catch (error) {
+    status.textContent = errorMessage(error);
+  }
+}
+
+function renderFiles() {
+  const files = visibleCameraFiles();
+  const tbody = document.querySelector("#files-list");
+  const status = document.querySelector("#files-status");
+  tbody.replaceChildren();
+  for (const file of files) {
+    const row = document.createElement("tr");
+    if (file.active) row.className = "active-file";
+    row.title = file.fileName;
+    const typeCell = document.createElement("td");
+    typeCell.append(fileTypeBadge(file));
+    const startedCell = document.createElement("td");
+    startedCell.textContent = displayDate(file.beginTime);
+    const durationCell = document.createElement("td");
+    durationCell.textContent = formatFileDuration((cameraDate(file.endTime) - cameraDate(file.beginTime)) / 1000);
+    const sizeCell = document.createElement("td");
+    sizeCell.textContent = formatSize(file.sizeBytes);
+    const stateCell = document.createElement("td");
+    const state = document.createElement("span");
+    state.className = `file-state${file.active ? " active" : ""}`;
+    state.textContent = file.active ? "Recording" : "Closed";
+    stateCell.append(state);
+    const actionCell = document.createElement("td");
+    actionCell.className = "row-actions";
+    const preview = document.createElement("button");
+    preview.type = "button";
+    preview.className = "compact";
+    preview.title = `Preview ${file.downloadName}`;
+    preview.innerHTML = '<span class="nf" aria-hidden="true"></span> Preview';
+    preview.addEventListener("click", () => void previewCameraFile(file));
+    actionCell.append(preview);
+    if (file.downloadable) {
+      const download = document.createElement("a");
+      download.className = "download-button";
+      download.href = `/api/download?file=${encodeURIComponent(file.fileName)}`;
+      download.download = file.downloadName;
+      download.innerHTML = '<span class="nf" aria-hidden="true"></span> Download';
+      actionCell.append(download);
+    }
+    row.append(typeCell, startedCell, durationCell, sizeCell, stateCell, actionCell);
+    tbody.append(row);
+  }
+  const recordings = files.filter((file) => file.kind === "recording").length;
+  const timelapses = files.length - recordings;
+  document.querySelector("#files-count").textContent = `${files.length} file${files.length === 1 ? "" : "s"}`;
+  document.querySelector("#files-breakdown").textContent = `${recordings} recordings · ${timelapses} time-lapses`;
+  document.querySelector("#files-size").textContent = formatSize(files.reduce((total, file) => total + file.sizeBytes, 0));
+  status.hidden = files.length > 0;
+  status.textContent = filesData?.files.length ? "No files match these filters." : "No files found for this day.";
+}
+
+async function loadFiles() {
+  const panel = document.querySelector("#panel-files");
+  const status = document.querySelector("#files-status");
+  panel.setAttribute("aria-busy", "true");
+  status.hidden = false;
+  status.textContent = "Loading camera files…";
+  try {
+    filesData = await getJson(`/api/files?date=${encodeURIComponent(document.querySelector("#files-date").value)}`);
+    filesLoaded = true;
+    renderFiles();
   } finally {
     panel.setAttribute("aria-busy", "false");
   }
@@ -541,7 +674,7 @@ async function applySettings() {
   const status = document.querySelector("#settings-status");
   button.disabled = true;
   button.textContent = "Applying…";
-  status.textContent = "Writing settings, reading them back, and verifying the result…";
+  status.textContent = "Applying and verifying…";
   try {
     const response = await fetch("/api/timelapse", { method: "POST", headers: { "Content-Type": "application/json", "X-GrowCam-Request": "1" }, body: JSON.stringify({ expectedRevision: timelapseData.config.revision, config: pendingConfig }) });
     const payload = await response.json();
@@ -550,7 +683,7 @@ async function applySettings() {
     pendingConfig = null;
     formIsDirty = false;
     await loadTimelapse(true);
-    status.textContent = "Camera accepted and retained the new schedule.";
+    status.textContent = "Schedule applied.";
   } catch (error) {
     status.textContent = errorMessage(error);
   } finally {
@@ -570,8 +703,8 @@ async function buildPreview(recording) {
   currentPreviewRecording = recording;
   latestButton.disabled = true;
   fileButtons.forEach((button) => { button.disabled = true; });
-  document.querySelector("#preview-title").textContent = recording.active ? "Opening progress stream" : "Opening timelapse stream";
-  status.textContent = `Opening the first decoded frame now; ${formatSize(recording.sizeBytes)} of native timelapse data continues transferring and caching in the background.`;
+  document.querySelector("#preview-title").textContent = recording.active ? "Opening progress" : "Opening preview";
+  status.textContent = `Streaming ${formatSize(recording.sizeBytes)}…`;
   card.setAttribute("aria-busy", "true");
   const url = `/api/timelapse/preview?file=${encodeURIComponent(recording.fileName)}`;
   const save = document.querySelector("#save-preview");
@@ -587,7 +720,7 @@ async function buildPreview(recording) {
     document.querySelector("#preview-placeholder").hidden = true;
     document.querySelector("#preview-title").textContent = recording.active ? "Progress so far" : "Timelapse preview";
     await previewVideo.play().catch(() => {});
-    status.textContent = `First frame ready in ${loadTimeLabel(startedAt)} · covers ${displayDate(recording.beginTime)} → ${displayDate(recording.endTime)} · cold progress is paced to the camera; the completed cache replays at 25 fps.`;
+    status.textContent = `Ready in ${loadTimeLabel(startedAt)} · ${displayDate(recording.beginTime)} → ${displayDate(recording.endTime)}.`;
   } catch (error) {
     if (!(error instanceof DOMException && error.name === "AbortError")) {
       document.querySelector("#preview-title").textContent = "Preview unavailable";
@@ -643,6 +776,19 @@ document.querySelector("#history-today").addEventListener("click", () => {
   historyLoaded = false;
   void ensureTabData("rewind");
 });
+document.querySelector("#files-date").value = localDateValue();
+document.querySelector("#files-date").max = localDateValue();
+document.querySelector("#files-date").addEventListener("change", () => {
+  filesLoaded = false;
+  void ensureTabData("files");
+});
+document.querySelector("#files-refresh").addEventListener("click", () => {
+  filesLoaded = false;
+  void ensureTabData("files");
+});
+document.querySelector("#files-search").addEventListener("input", renderFiles);
+document.querySelector("#files-kind").addEventListener("change", renderFiles);
+document.querySelector("#files-sort").addEventListener("change", renderFiles);
 document.querySelector("#history-previous").addEventListener("click", () => {
   const index = selectedHistoryIndex - 1;
   const recording = historyData?.recordings[index];

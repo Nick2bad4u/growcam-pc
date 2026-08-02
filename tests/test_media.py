@@ -25,6 +25,80 @@ def test_ffmpeg_reports_missing_executable(monkeypatch: pytest.MonkeyPatch) -> N
         _ = media.snapshot("192.0.2.1")
 
 
+def test_snapshot_returns_ffmpeg_jpeg_and_uses_encoded_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed_command: list[str] = []
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        observed_command.extend(command)
+        assert kwargs["check"] is True
+        assert kwargs["capture_output"] is True
+        assert kwargs["timeout"] == 15
+        return subprocess.CompletedProcess(command, 0, b"jpeg bytes", b"")
+
+    monkeypatch.setattr("growcam.media._ffmpeg", lambda: "ffmpeg")
+    monkeypatch.setattr("growcam.media.subprocess.run", fake_run)
+
+    assert media.snapshot("192.0.2.1", "camera@home", "secret/value") == b"jpeg bytes"
+    assert "rtsp://camera%40home:secret%2Fvalue@192.0.2.1:554/" in observed_command
+    assert "mjpeg" in observed_command
+
+
+def test_snapshot_reports_ffmpeg_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
+    def failed_run(_command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        raise subprocess.CalledProcessError(1, "ffmpeg", stderr=b"camera refused stream")
+
+    monkeypatch.setattr("growcam.media._ffmpeg", lambda: "ffmpeg")
+    monkeypatch.setattr("growcam.media.subprocess.run", failed_run)
+
+    with pytest.raises(media.MediaError, match="camera refused stream"):
+        _ = media.snapshot("192.0.2.1")
+
+
+def test_mjpeg_stream_uses_requested_rate_and_width(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed_command: list[str] = []
+    process = cast("subprocess.Popen[bytes]", object())
+
+    def fake_popen(command: list[str], **kwargs: object) -> subprocess.Popen[bytes]:
+        observed_command.extend(command)
+        assert kwargs == {
+            "stdin": subprocess.DEVNULL,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+        }
+        return process
+
+    monkeypatch.setattr("growcam.media._ffmpeg", lambda: "ffmpeg")
+    monkeypatch.setattr("growcam.media.subprocess.Popen", fake_popen)
+
+    assert media.start_mjpeg("192.0.2.1", frames_per_second=8, width=960) is process
+    assert "fps=8,scale=960:-2" in observed_command
+    assert "growcam" in observed_command
+
+
+def test_live_clip_creates_parent_and_copies_the_stream(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = tmp_path / "clips" / "live.mkv"
+    observed_command: list[str] = []
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        observed_command.extend(command)
+        assert kwargs["check"] is True
+        assert kwargs["timeout"] == 30
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr("growcam.media._ffmpeg", lambda: "ffmpeg")
+    monkeypatch.setattr("growcam.media.subprocess.run", fake_run)
+
+    media.save_live_clip("192.0.2.1", destination, 12.5)
+
+    assert destination.parent.is_dir()
+    assert observed_command[observed_command.index("-t") + 1] == "12.5"
+    assert observed_command[observed_command.index("-c") + 1] == "copy"
+    assert observed_command[-1] == str(destination)
+
+
 def test_remux_recording_uses_hevc_and_atomic_destination(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
