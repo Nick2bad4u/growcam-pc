@@ -5,6 +5,8 @@ All notable changes to GrowCam PC are documented here. The project follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-02
+
 ### Changed
 
 - Cancel abandoned camera preview pipelines immediately, finalize completed
@@ -48,4 +50,5 @@ All notable changes to GrowCam PC are documented here. The project follows
   Actions validation.
 
 [0.1.0]: https://github.com/Nick2bad4u/growcam-pc/releases/tag/v0.1.0
-[Unreleased]: https://github.com/Nick2bad4u/growcam-pc/compare/v0.1.0...HEAD
+[0.2.0]: https://github.com/Nick2bad4u/growcam-pc/compare/v0.1.0...v0.2.0
+[Unreleased]: https://github.com/Nick2bad4u/growcam-pc/compare/v0.2.0...HEAD
