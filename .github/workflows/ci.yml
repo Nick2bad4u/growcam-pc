@@ -196,11 +196,12 @@ jobs:
         id: lychee
         uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
         with:
-          # The project page is created by the first successful tagged release.
+          # Docusaurus combines this origin with baseUrl; the origin alone is not a deployed page.
+          # The PyPI project and v0.3.0 compare URLs are created by the first successful tagged release.
           args: >-
             --config node_modules/lychee-config-nick2bad4u/lychee.toml
             --exclude '^.*pypi[.]org/project/growcam-pc/?$'
-            --exclude '^.*nick2bad4u[.]github[.]io(?:/growcam-pc)?/?$'
+            --exclude '^https://nick2bad4u[.]github[.]io/?$'
             --exclude '^.*github[.]com/Nick2bad4u/growcam-pc/compare/v0[.]2[.]0[.][.][.]v0[.]3[.]0$'
             --exclude '^.*github[.]com/Nick2bad4u/growcam-pc/compare/v0[.]3[.]0[.][.][.]HEAD$'
             README.md CHANGELOG.md CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md website
