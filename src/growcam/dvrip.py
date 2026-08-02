@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Self, cast
 if TYPE_CHECKING:
     from collections.abc import Mapping
     from pathlib import Path
+    from typing import BinaryIO
 
 _HEADER = struct.Struct("<BB2xIIBBHI")
 _MAGIC = 0xFF
@@ -24,6 +25,7 @@ _DOWNLOAD_CLAIM_MESSAGE = 1425
 _DOWNLOAD_DATA_MESSAGE = 1426
 _PLAYBACK_DATA_MESSAGE = 1422
 _PLAYBACK_EOF_MESSAGE = 1423
+_PLAYBACK_IDLE_TIMEOUT = 1.0
 
 
 class DVRIPError(RuntimeError):
@@ -216,6 +218,22 @@ class DVRIPClient:
         partial = destination.with_name(destination.name + ".part")
         if partial.exists():
             raise FileExistsError(f"Partial destination already exists: {partial}")
+
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with partial.open("xb") as output:
+                bytes_written = self.stream_download(filename, output)
+        except BaseException:
+            if partial.exists():
+                partial.unlink()
+            raise
+        _ = partial.rename(destination)
+        return bytes_written
+
+    def stream_download(self, filename: str, output: BinaryIO) -> int:
+        """Write one complete camera recording directly to an open binary stream."""
+        if not filename.startswith("/"):
+            raise ValueError("Camera filename must be an absolute DVRIP path")
         if self._socket is None:
             raise DVRIPError("Client is not connected")
 
@@ -237,6 +255,7 @@ class DVRIPClient:
         data_socket.settimeout(max(self.timeout, 30.0))
         bytes_written = 0
         keepalive: tuple[threading.Event, threading.Thread, list[Exception]] | None = None
+        transfer_started = False
         try:
             self._send_packet(data_socket, 1424, body, sequence=0)
             try:
@@ -247,6 +266,7 @@ class DVRIPClient:
             except TimeoutError as error:
                 raise DVRIPError("Timed out waiting for the camera to accept playback") from error
             self._require_ok("download start", response)
+            transfer_started = True
             try:
                 message_id, claim_payload, _end = self._receive_packet(data_socket)
             except TimeoutError as error:
@@ -256,27 +276,26 @@ class DVRIPClient:
             claim = _decode_json(claim_payload, message_id)
             self._require_ok("download claim", claim)
             keepalive = self._start_keepalive()
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            with partial.open("xb") as output:
-                while True:
-                    try:
-                        message_id, payload, end = self._receive_packet(data_socket)
-                    except TimeoutError as error:
-                        raise DVRIPError("Timed out while receiving recording data") from error
-                    if message_id != _DOWNLOAD_DATA_MESSAGE:
-                        raise DVRIPError(f"Unexpected download data message {message_id}")
-                    _ = output.write(payload)
-                    bytes_written += len(payload)
-                    if end:
-                        break
+            while True:
+                try:
+                    message_id, payload, end = self._receive_packet(data_socket)
+                except TimeoutError as error:
+                    raise DVRIPError("Timed out while receiving recording data") from error
+                if message_id != _DOWNLOAD_DATA_MESSAGE:
+                    raise DVRIPError(f"Unexpected download data message {message_id}")
+                _ = output.write(payload)
+                bytes_written += len(payload)
+                if end:
+                    break
             self._finish_keepalive(keepalive)
             keepalive = None
-            _ = partial.rename(destination)
             return bytes_written
         finally:
             if keepalive is not None:
                 self._stop_keepalive(keepalive)
             data_socket.close()
+            if transfer_started:
+                self._stop_media_transfer(playback, action="DownloadStop")
 
     def playback_snapshot(
         self,
@@ -321,15 +340,41 @@ class DVRIPClient:
         file_type: int = 0,
     ) -> int:
         """Capture playback selected by camera time and native recording type."""
+        playback = self._playback_by_time_request(start, end, file_type=file_type)
+        return self._capture_playback(
+            playback,
+            destination,
+            expected_bytes=None,
+            maximum_bytes=512 * 1024 * 1024,
+        )
+
+    def stream_playback_by_time(
+        self,
+        *,
+        start: datetime,
+        end: datetime,
+        output: BinaryIO,
+        file_type: int = 0,
+    ) -> int:
+        """Write camera-time playback packets directly to an open binary stream."""
+        playback = self._playback_by_time_request(start, end, file_type=file_type)
+        return self._stream_playback(
+            playback,
+            output,
+            expected_bytes=None,
+            maximum_bytes=512 * 1024 * 1024,
+        )
+
+    @staticmethod
+    def _playback_by_time_request(start: datetime, end: datetime, *, file_type: int) -> dict[str, object]:
         if end <= start:
             raise ValueError("Playback end time must be after its start time")
         if file_type < 0:
             raise ValueError("Playback file type must not be negative")
-        channel = 0
-        playback = {
+        return {
             "Action": "Start",
             "Parameter": {
-                "Channel": channel,
+                "Channel": 0,
                 "FileName": "",
                 "PlayMode": "ByTime",
                 "StreamType": 0,
@@ -340,12 +385,6 @@ class DVRIPClient:
             "EndTime": _camera_time(end),
             "StreamType": 0,
         }
-        return self._capture_playback(
-            playback,
-            destination,
-            expected_bytes=None,
-            maximum_bytes=512 * 1024 * 1024,
-        )
 
     def _capture_playback(
         self,
@@ -355,15 +394,40 @@ class DVRIPClient:
         expected_bytes: int | None,
         maximum_bytes: int,
     ) -> int:
-        if expected_bytes is not None and expected_bytes > maximum_bytes:
-            raise ValueError("Recording exceeds the playback snapshot safety limit")
-        if maximum_bytes <= 0:
-            raise ValueError("Playback snapshot safety limit must be greater than zero")
         if destination.exists():
             raise FileExistsError(f"Destination already exists: {destination}")
         partial = destination.with_name(destination.name + ".part")
         if partial.exists():
             raise FileExistsError(f"Partial destination already exists: {partial}")
+
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with partial.open("xb") as output:
+                bytes_written = self._stream_playback(
+                    playback,
+                    output,
+                    expected_bytes=expected_bytes,
+                    maximum_bytes=maximum_bytes,
+                )
+        except BaseException:
+            if partial.exists():
+                partial.unlink()
+            raise
+        _ = partial.rename(destination)
+        return bytes_written
+
+    def _stream_playback(
+        self,
+        playback: Mapping[str, object],
+        output: BinaryIO,
+        *,
+        expected_bytes: int | None,
+        maximum_bytes: int,
+    ) -> int:
+        if expected_bytes is not None and expected_bytes > maximum_bytes:
+            raise ValueError("Recording exceeds the playback snapshot safety limit")
+        if maximum_bytes <= 0:
+            raise ValueError("Playback snapshot safety limit must be greater than zero")
         if self._socket is None:
             raise DVRIPError("Client is not connected")
 
@@ -380,6 +444,7 @@ class DVRIPClient:
         data_socket.settimeout(max(self.timeout, 30.0))
         bytes_written = 0
         keepalive: tuple[threading.Event, threading.Thread, list[Exception]] | None = None
+        transfer_started = False
         try:
             self._send_packet(data_socket, 1424, body, sequence=0)
             control_body = {"Name": "OPPlayBack", "OPPlayBack": start_playback}
@@ -390,6 +455,7 @@ class DVRIPClient:
             except DVRIPError as error:
                 raise DVRIPError(f"Camera rejected the playback control request: {error}") from error
             self._require_ok("playback start", response)
+            transfer_started = True
             try:
                 message_id, claim_payload, _end = self._receive_packet(data_socket)
             except DVRIPError as error:
@@ -398,37 +464,55 @@ class DVRIPClient:
                 raise DVRIPError(f"Unexpected playback claim response message {message_id}")
             self._require_ok("playback claim", _decode_json(claim_payload, message_id))
             keepalive = self._start_keepalive()
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            with partial.open("xb") as output:
-                while expected_bytes is None or bytes_written < expected_bytes:
-                    try:
-                        message_id, payload, _fragment_end = self._receive_packet(data_socket)
-                    except TimeoutError as error:
-                        if bytes_written > 0:
-                            break
-                        raise DVRIPError("Timed out while receiving playback data") from error
-                    except DVRIPError as error:
-                        if bytes_written > 0 and str(error) == "Camera closed the DVRIP connection":
-                            break
-                        raise DVRIPError(f"Camera closed before returning playback media: {error}") from error
-                    if message_id == _PLAYBACK_EOF_MESSAGE:
+            while expected_bytes is None or bytes_written < expected_bytes:
+                try:
+                    message_id, payload, _fragment_end = self._receive_packet(data_socket)
+                except TimeoutError as error:
+                    if bytes_written > 0:
                         break
-                    if message_id != _PLAYBACK_DATA_MESSAGE:
-                        raise DVRIPError(f"Unexpected playback data message {message_id}")
-                    _ = output.write(payload)
-                    bytes_written += len(payload)
-                    if bytes_written > maximum_bytes:
-                        raise DVRIPError("Playback exceeded the snapshot safety limit")
+                    raise DVRIPError("Timed out while receiving playback data") from error
+                except DVRIPError as error:
+                    if bytes_written > 0 and str(error) == "Camera closed the DVRIP connection":
+                        break
+                    raise DVRIPError(f"Camera closed before returning playback media: {error}") from error
+                if message_id == _PLAYBACK_EOF_MESSAGE:
+                    break
+                if message_id != _PLAYBACK_DATA_MESSAGE:
+                    raise DVRIPError(f"Unexpected playback data message {message_id}")
+                _ = output.write(payload)
+                bytes_written += len(payload)
+                if payload and bytes_written == len(payload):
+                    # Some GrowCam firmware never emits playback EOF. Keep the
+                    # generous timeout for setup and the first media packet,
+                    # then finish promptly once an established stream goes idle.
+                    data_socket.settimeout(_PLAYBACK_IDLE_TIMEOUT)
+                if bytes_written > maximum_bytes:
+                    raise DVRIPError("Playback exceeded the snapshot safety limit")
             if bytes_written == 0:
                 raise DVRIPError("Camera returned no playback data")
             self._finish_keepalive(keepalive)
             keepalive = None
-            _ = partial.rename(destination)
             return bytes_written
         finally:
             if keepalive is not None:
                 self._stop_keepalive(keepalive)
             data_socket.close()
+            if transfer_started:
+                self._stop_media_transfer(playback, action="Stop")
+
+    def _stop_media_transfer(self, playback: Mapping[str, object], *, action: str) -> None:
+        """Best-effort release of firmware playback state without masking the caller's result."""
+        stopped_playback = {**playback, "Action": action}
+        body = {"Name": "OPPlayBack", "OPPlayBack": stopped_playback}
+        if self._admin_token:
+            body["AdminToken"] = self._admin_token
+        try:
+            response = self._request(1420, body)
+            self._require_ok(f"playback {action.casefold()}", response)
+        except (DVRIPError, OSError):
+            # A closed or rebooting camera cannot retain useful playback state,
+            # and cleanup must never replace the original transfer result.
+            return
 
     def _start_keepalive(self) -> tuple[threading.Event, threading.Thread, list[Exception]]:
         """Keep a long media transfer's authenticated control session alive."""

@@ -10,6 +10,8 @@ import socket
 import subprocess
 import sys
 import threading
+import time as time_module
+from collections import OrderedDict
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, time, timedelta
 from http import HTTPStatus
@@ -24,9 +26,18 @@ from typing_extensions import override
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
+    from io import BufferedIOBase
+    from typing import BinaryIO
 
 from .dvrip import DVRIPClient
-from .media import MediaError, remux_recording, snapshot, start_mjpeg, transcode_timelapse_preview
+from .media import (
+    MediaError,
+    build_fragmented_preview,
+    finalize_fragmented_preview,
+    remux_recording,
+    snapshot,
+    start_mjpeg,
+)
 from .media_cache import MediaCache
 from .timelapse import (
     TIMELAPSE_CONFIG_NAME,
@@ -38,6 +49,11 @@ from .timelapse import (
 )
 
 _MAX_REQUEST_BYTES = 16 * 1024
+_RECORDING_METADATA_TTL_SECONDS = 60.0
+_MAX_RECORDING_METADATA_ENTRIES = 2048
+_STREAM_PREVIEW_VERSION = "indexed-v12"
+_TIMELAPSE_STREAM_FRAMES_PER_SECOND = 2.0
+_TIMELAPSE_CACHED_FRAMES_PER_SECOND = 25.0
 _WINDOWS_ADDRESS_IN_USE = 10048
 _CONTENT_SECURITY_POLICY = (
     "default-src 'self'; base-uri 'none'; connect-src 'self'; form-action 'self'; "
@@ -60,6 +76,10 @@ class WebRequestError(RuntimeError):
         self.status = status
 
 
+class PreviewClientDisconnectedError(ConnectionError):
+    """Signal that an abandoned browser preview should stop building."""
+
+
 @dataclass(frozen=True)
 class WebConfig:
     """Connection settings shared by local HTTP request handlers."""
@@ -80,8 +100,44 @@ class GrowCamHTTPServer(ThreadingHTTPServer):
         """Create a server for one immutable camera configuration."""
         self.config = config
         self.camera_operation_lock = threading.Lock()
+        self.recording_metadata_lock = threading.Lock()
+        self.recording_metadata: OrderedDict[str, tuple[float, dict[str, object]]] = OrderedDict()
         super().__init__(address, GrowCamHandler)
         self.media_cache = MediaCache(_preview_cache_directory(), self.camera_operation_lock)
+
+    def remember_recordings(self, recordings: list[dict[str, object]]) -> None:
+        """Retain recently returned camera metadata for immediate preview requests."""
+        now = time_module.monotonic()
+        with self.recording_metadata_lock:
+            self._discard_expired_recordings(now)
+            for record in recordings:
+                filename = record.get("fileName")
+                if not isinstance(filename, str) or not filename:
+                    continue
+                self.recording_metadata[filename] = (now, dict(record))
+                self.recording_metadata.move_to_end(filename)
+            while len(self.recording_metadata) > _MAX_RECORDING_METADATA_ENTRIES:
+                _ = self.recording_metadata.popitem(last=False)
+
+    def cached_recording(self, filename: str) -> dict[str, object] | None:
+        """Return fresh recording metadata previously sent to this browser session."""
+        now = time_module.monotonic()
+        with self.recording_metadata_lock:
+            self._discard_expired_recordings(now)
+            cached = self.recording_metadata.get(filename)
+            if cached is None:
+                return None
+            self.recording_metadata.move_to_end(filename)
+            return dict(cached[1])
+
+    def _discard_expired_recordings(self, now: float) -> None:
+        expired = [
+            filename
+            for filename, (stored_at, _record) in self.recording_metadata.items()
+            if now - stored_at > _RECORDING_METADATA_TTL_SECONDS
+        ]
+        for filename in expired:
+            del self.recording_metadata[filename]
 
     @override
     def server_bind(self) -> None:
@@ -246,17 +302,29 @@ class GrowCamHandler(BaseHTTPRequestHandler):
                     channel=0,
                     event="R",
                 )
+        browser_recordings = _browser_recordings(
+            recordings,
+            active_filename=_active_history_filename(recordings, selected_date, now),
+        )
+        cast("GrowCamHTTPServer", self.server).remember_recordings(browser_recordings)
         return {
             "date": selected_date.isoformat(),
-            "recordings": _browser_recordings(
-                recordings,
-                active_filename=_active_history_filename(recordings, selected_date, now),
-            ),
+            "recordings": browser_recordings,
         }
 
     def _timelapse_state(self) -> dict[str, object]:
         with self._camera() as camera:
-            return _timelapse_state(camera, now=datetime.now())
+            state = _timelapse_state(camera, now=datetime.now())
+        records = state.get("recordings")
+        if isinstance(records, list):
+            cast("GrowCamHTTPServer", self.server).remember_recordings(
+                [
+                    cast("dict[str, object]", record)
+                    for record in cast("list[object]", records)
+                    if isinstance(record, dict)
+                ]
+            )
+        return state
 
     def _snapshot(self) -> None:
         config = cast("GrowCamHTTPServer", self.server).config
@@ -308,29 +376,44 @@ class GrowCamHandler(BaseHTTPRequestHandler):
     def _timelapse_preview(self, camera_file: str, *, download: bool) -> None:
         _ = _camera_file(camera_file, required_event="E")
         server = cast("GrowCamHTTPServer", self.server)
-        with self._camera() as camera:
-            state = _timelapse_state(camera, now=datetime.now())
-        record = _matching_recording(state, camera_file)
+        record = server.cached_recording(camera_file)
+        if record is None:
+            record = _matching_recording(self._timelapse_state(), camera_file)
         resolved_file = cast("str", record["fileName"])
-        key = f"timelapse:{_recording_identity(resolved_file)}:{record['sizeBytes']}"
+        key = f"timelapse:{_STREAM_PREVIEW_VERSION}:{_recording_identity(resolved_file)}:{record['sizeBytes']}"
+        mode = "attachment" if download else "inline"
+        response_started = False
 
         def build(preview: Path) -> None:
-            raw = preview.with_suffix(".raw-hevc")
-            try:
+            nonlocal response_started
+            response_started = True
+
+            def source(output: BinaryIO) -> int:
                 with self._camera() as camera:
-                    _ = camera.playback_by_time_snapshot(
+                    return camera.stream_playback_by_time(
                         start=_camera_datetime(record["beginTime"]),
                         end=_camera_datetime(record["endTime"]),
-                        destination=raw,
+                        output=output,
                         file_type=5,
                     )
-                transcode_timelapse_preview(raw, preview, frames_per_second=25.0)
-            finally:
-                if raw.exists():
-                    raw.unlink()
 
-        preview, cache_hit = server.media_cache.get_or_build(key, ".mp4", build)
-        mode = "attachment" if download else "inline"
+            self._build_streaming_preview(
+                preview,
+                source,
+                frames_per_second=_TIMELAPSE_STREAM_FRAMES_PER_SECOND,
+                cached_frames_per_second=_TIMELAPSE_CACHED_FRAMES_PER_SECOND,
+                disposition=f'{mode}; filename="{_preview_name(resolved_file)}"',
+            )
+
+        try:
+            preview, cache_hit = server.media_cache.get_or_build(key, ".mp4", build)
+        except (OSError, RuntimeError, ValueError):
+            if response_started:
+                self.close_connection = True
+                return
+            raise
+        if response_started:
+            return
         self._send_file(
             preview,
             content_type="video/mp4",
@@ -345,6 +428,80 @@ class GrowCamHandler(BaseHTTPRequestHandler):
         day_end = min(day_start + timedelta(days=1), datetime.now())
         if day_end <= day_start:
             raise WebRequestError(HTTPStatus.NOT_FOUND, "No recording exists for that future date")
+        server = cast("GrowCamHTTPServer", self.server)
+        record = self._history_recording(camera_file, selected_date, day_start, day_end)
+        resolved_file = cast("str", record["fileName"])
+        preview_range = _history_preview_range(record, at=at, duration=duration)
+        range_key = (
+            "full" if preview_range is None else f"{preview_range[0].isoformat()}:{preview_range[1].isoformat()}"
+        )
+        key = (
+            f"history:{_STREAM_PREVIEW_VERSION}:{_recording_identity(resolved_file)}:{record['sizeBytes']}:{range_key}"
+        )
+        response_started = False
+
+        def build(preview: Path) -> None:
+            nonlocal response_started
+            if preview_range is None:
+
+                def source(output: BinaryIO) -> int:
+                    with self._camera() as camera:
+                        if cast("bool", record["active"]):
+                            return camera.stream_playback_by_time(
+                                start=_camera_datetime(record["beginTime"]),
+                                end=_camera_datetime(record["endTime"]),
+                                output=output,
+                                file_type=0,
+                            )
+                        return camera.stream_download(resolved_file, output)
+
+            else:
+                selected_range = preview_range
+
+                def source(output: BinaryIO) -> int:
+                    with self._camera() as camera:
+                        return camera.stream_playback_by_time(
+                            start=selected_range[0],
+                            end=selected_range[1],
+                            output=output,
+                            file_type=0,
+                        )
+
+            response_started = True
+            self._build_streaming_preview(
+                preview,
+                source,
+                frames_per_second=7.5,
+                disposition=f'inline; filename="{_history_preview_name(resolved_file)}"',
+            )
+
+        try:
+            preview, cache_hit = server.media_cache.get_or_build(key, ".mp4", build)
+        except (OSError, RuntimeError, ValueError):
+            if response_started:
+                self.close_connection = True
+                return
+            raise
+        if response_started:
+            return
+        self._send_file(
+            preview,
+            content_type="video/mp4",
+            disposition=f'inline; filename="{_history_preview_name(resolved_file)}"',
+            cache_status="HIT" if cache_hit else "MISS",
+        )
+
+    def _history_recording(
+        self,
+        camera_file: str,
+        selected_date: date,
+        day_start: datetime,
+        day_end: datetime,
+    ) -> dict[str, object]:
+        server = cast("GrowCamHTTPServer", self.server)
+        cached = server.cached_recording(camera_file)
+        if cached is not None:
+            return cached
         with self._camera() as camera:
             recordings = camera.recordings(
                 start=day_start,
@@ -352,51 +509,45 @@ class GrowCamHandler(BaseHTTPRequestHandler):
                 channel=0,
                 event="R",
             )
-        state: dict[str, object] = {
-            "recordings": _browser_recordings(
-                recordings,
-                active_filename=_active_history_filename(recordings, selected_date, datetime.now()),
-            )
-        }
-        record = _matching_recording(state, camera_file)
-        resolved_file = cast("str", record["fileName"])
-        preview_range = _history_preview_range(record, at=at, duration=duration)
-        range_key = (
-            "full" if preview_range is None else f"{preview_range[0].isoformat()}:{preview_range[1].isoformat()}"
+        browser_recordings = _browser_recordings(
+            recordings,
+            active_filename=_active_history_filename(recordings, selected_date, datetime.now()),
         )
-        key = f"history:{_recording_identity(resolved_file)}:{record['sizeBytes']}:{range_key}"
-        server = cast("GrowCamHTTPServer", self.server)
+        server.remember_recordings(browser_recordings)
+        return _matching_recording({"recordings": browser_recordings}, camera_file)
 
-        def build(preview: Path) -> None:
-            raw = preview.with_suffix(".raw-hevc")
-            try:
-                with self._camera() as camera:
-                    if preview_range is not None:
-                        _ = camera.playback_by_time_snapshot(
-                            start=preview_range[0],
-                            end=preview_range[1],
-                            destination=raw,
-                            file_type=0,
-                        )
-                    elif cast("bool", record["active"]):
-                        _ = camera.playback_snapshot(
-                            resolved_file,
-                            raw,
-                            expected_bytes=cast("int", record["sizeBytes"]),
-                        )
-                    else:
-                        _ = camera.download(resolved_file, raw)
-                transcode_timelapse_preview(raw, preview, frames_per_second=7.5)
-            finally:
-                if raw.exists():
-                    raw.unlink()
+    def _build_streaming_preview(
+        self,
+        destination: Path,
+        source: Callable[[BinaryIO], int],
+        *,
+        frames_per_second: float,
+        cached_frames_per_second: float | None = None,
+        disposition: str,
+    ) -> None:
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "video/mp4")
+        self.send_header("Content-Disposition", disposition)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-GrowCam-Preview-Cache", "MISS")
+        self.send_header("X-GrowCam-Preview-Streaming", "1")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
 
-        preview, cache_hit = server.media_cache.get_or_build(key, ".mp4", build)
-        self._send_file(
-            preview,
-            content_type="video/mp4",
-            disposition=f'inline; filename="{_history_preview_name(resolved_file)}"',
-            cache_status="HIT" if cache_hit else "MISS",
+        def consume(chunk: bytes) -> None:
+            _write_preview_chunk(self.wfile, chunk)
+
+        _ = build_fragmented_preview(
+            source,
+            destination,
+            consume,
+            frames_per_second=frames_per_second,
+        )
+        cached_rate = frames_per_second if cached_frames_per_second is None else cached_frames_per_second
+        finalize_fragmented_preview(
+            destination,
+            timestamp_scale=frames_per_second / cached_rate,
         )
 
     def _mjpeg(self) -> None:
@@ -465,18 +616,35 @@ class GrowCamHandler(BaseHTTPRequestHandler):
         disposition: str,
         cache_status: str | None = None,
     ) -> None:
-        self.send_response(HTTPStatus.OK)
+        file_size = path.stat().st_size
+        requested_range = _byte_range(self.headers.get("Range"), file_size)
+        if requested_range is None:
+            start = 0
+            end = file_size - 1
+            status = HTTPStatus.OK
+        else:
+            start, end = requested_range
+            status = HTTPStatus.PARTIAL_CONTENT
+        content_length = end - start + 1
+
+        self.send_response(status)
         self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(path.stat().st_size))
+        self.send_header("Content-Length", str(content_length))
         self.send_header("Content-Disposition", disposition)
         self.send_header("Cache-Control", "no-store")
+        self.send_header("Accept-Ranges", "bytes")
+        if status is HTTPStatus.PARTIAL_CONTENT:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
         if cache_status is not None:
             self.send_header("X-GrowCam-Preview-Cache", cache_status)
         self.end_headers()
         try:
             with path.open("rb") as source:
-                while chunk := source.read(1024 * 1024):
+                _ = source.seek(start)
+                remaining = content_length
+                while remaining > 0 and (chunk := source.read(min(1024 * 1024, remaining))):
                     _ = self.wfile.write(chunk)
+                    remaining -= len(chunk)
         except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
             pass
 
@@ -629,6 +797,48 @@ def _history_preview_range(
     if requested_end <= requested_start:
         raise WebRequestError(HTTPStatus.BAD_REQUEST, "Quick rewind window is empty")
     return requested_start, requested_end
+
+
+def _byte_range(header: str | None, file_size: int) -> tuple[int, int] | None:
+    """Parse one satisfiable HTTP byte range for a non-empty local file."""
+    if header is None:
+        return None
+    if file_size <= 0:
+        raise WebRequestError(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE, "Media file is empty")
+    unit, separator, value = header.partition("=")
+    if separator != "=" or unit.strip().casefold() != "bytes" or "," in value:
+        raise WebRequestError(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE, "Media byte range is invalid")
+    start_text, dash, end_text = value.strip().partition("-")
+    if dash != "-" or (not start_text and not end_text):
+        raise WebRequestError(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE, "Media byte range is invalid")
+    try:
+        start_value = int(start_text) if start_text else None
+        end_value = int(end_text) if end_text else None
+    except ValueError as error:
+        raise WebRequestError(
+            HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE,
+            "Media byte range is invalid",
+        ) from error
+    if start_value is not None:
+        start = start_value
+        end = file_size - 1 if end_value is None else end_value
+    else:
+        if end_value is None or end_value <= 0:
+            raise WebRequestError(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE, "Media byte range is invalid")
+        start = max(0, file_size - end_value)
+        end = file_size - 1
+    if start < 0 or start >= file_size or end < start:
+        raise WebRequestError(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE, "Media byte range is unsatisfiable")
+    return start, min(end, file_size - 1)
+
+
+def _write_preview_chunk(output: BufferedIOBase, chunk: bytes) -> None:
+    """Write one browser fragment or cancel the camera build after disconnect."""
+    try:
+        _ = output.write(chunk)
+        output.flush()
+    except OSError as error:
+        raise PreviewClientDisconnectedError("Browser abandoned the media preview") from error
 
 
 def _preview_cache_directory(

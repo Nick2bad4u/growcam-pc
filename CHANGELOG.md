@@ -3,6 +3,31 @@
 All notable changes to GrowCam PC are documented here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Cancel abandoned camera preview pipelines immediately, finalize completed
+  streams as indexed fast-start MP4, and support HTTP byte-range seeking on
+  cached media.
+- Pace cold native timelapse previews at 2 fps to match the camera's stored-frame
+  delivery, then losslessly retime the completed cache to 25 fps.
+- Stream timelapse, quick-rewind, and recording-block previews as fragmented
+  MP4 so the first decoded frame can appear while transfer, transcoding, and
+  persistent caching continue in the background.
+- Remove browser `Blob` buffering and load media endpoints directly, with
+  recent recording metadata retained briefly to avoid duplicate camera index
+  queries.
+- Reduce DVRIP playback completion latency after media starts and tune FFmpeg
+  for low-latency HEVC decoding and H.264 encoding.
+- Add 4× and 8× timelapse playback speeds.
+
+### Fixed
+
+- Remove abandoned generated preview partials on startup without disturbing a
+  partial still owned by another running server.
+- Clean up failed direct-download partials instead of blocking later retries.
+
 ## [0.1.0] - 2026-08-01
 
 ### Added
@@ -23,3 +48,4 @@ All notable changes to GrowCam PC are documented here. The project follows
   Actions validation.
 
 [0.1.0]: https://github.com/Nick2bad4u/growcam-pc/releases/tag/v0.1.0
+[Unreleased]: https://github.com/Nick2bad4u/growcam-pc/compare/v0.1.0...HEAD

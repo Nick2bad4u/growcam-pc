@@ -89,3 +89,18 @@ def test_empty_persistent_preview_is_rebuilt(tmp_path: Path) -> None:
         )
 
     assert not list(tmp_path.iterdir())
+
+
+def test_cache_startup_removes_only_stale_generated_partials(tmp_path: Path) -> None:
+    streaming_partial = tmp_path / "preview.mp4.part"
+    transcode_partial = tmp_path / "preview.part.mp4"
+    completed = tmp_path / "completed.mp4"
+    _ = streaming_partial.write_bytes(b"interrupted stream")
+    _ = transcode_partial.write_bytes(b"interrupted transcode")
+    _ = completed.write_bytes(b"completed preview")
+
+    _ = MediaCache(tmp_path, threading.Lock())
+
+    assert not streaming_partial.exists()
+    assert not transcode_partial.exists()
+    assert completed.read_bytes() == b"completed preview"

@@ -33,6 +33,7 @@ class MediaCache:
         self._lock = threading.Lock()
         self._completed: OrderedDict[str, Path] = OrderedDict()
         self._inflight: dict[str, Future[Path]] = {}
+        self._remove_stale_partials()
         self._trim_directory()
 
     def get_or_build(self, key: str, suffix: str, builder: Callable[[Path], None]) -> tuple[Path, bool]:
@@ -110,6 +111,15 @@ class MediaCache:
         )
         for stale in previews[self._maximum_entries :]:
             stale.unlink()
+
+    def _remove_stale_partials(self) -> None:
+        for pattern in ("*.part", "*.part.mp4"):
+            for partial in self._directory.glob(pattern):
+                try:
+                    partial.unlink()
+                except (FileNotFoundError, PermissionError):
+                    # Another server thread or process may still own this build.
+                    continue
 
 
 def _require_preview(destination: Path) -> None:

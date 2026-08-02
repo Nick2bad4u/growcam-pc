@@ -116,21 +116,40 @@ estimated progress. Schedule writes are guarded:
 Changing an active schedule may close the current camera file and begin a new
 one. Previewing is read-only and does not interrupt capture.
 
-## Why a first preview can take a while
+## How progressive previews work
 
-The camera does not serve a ready-made browser video. For a timelapse preview,
-GrowCam PC must first transfer the native HEVC frames accumulated so far over
-DVRIP, then encode them as H.264 MP4. A growing 36 MiB camera file therefore
-cannot begin browser playback immediately; the transfer and encode must finish
-before a complete cached MP4 is returned. The displayed playback is
-accelerated timelapse video, while the timestamp under the player identifies
-the real-world capture period it covers.
+The camera stores native HEVC rather than a ready-made browser video. GrowCam
+PC streams those camera packets directly through FFmpeg and returns fragmented
+H.264 MP4 as it is encoded. The first decoded frame can therefore appear while
+the remaining camera data is still transferring. Leaving or replacing a preview
+cancels that camera operation immediately instead of making the next selection
+wait behind abandoned work.
 
-Daily rewind has the same constraint in full-block mode. Use its two-minute
-window for the shortest first start. Completed previews are cached locally, so
-the exact same request is normally near-instant on replay. An active file gets
-a new cache key when its camera-reported size changes, ensuring the next preview
-includes newly captured frames rather than stale output.
+A cold timelapse preview can still take several seconds to show its first frame,
+and transferring the complete growing file takes longer in the background. Cold
+timelapses are paced at 2 fps so the player does not outrun the camera's stored
+frame transfer. Once the transfer completes, GrowCam PC losslessly retimes that
+cache to 25 fps and writes a fast-start MP4 index for normal accelerated replay.
+Daily Rewind's two- and five-minute windows normally start fastest; full-block
+previews also stream progressively but have more data to finish caching. The
+timestamp below each player identifies the real-world period covered even when
+the resulting video is accelerated or the camera used an adaptive recording
+rate.
+
+Completed previews support HTTP byte ranges and carry a complete MP4 seek index,
+so replay and arbitrary seeking do not require reading the file from the start.
+An active file gets a new cache key when its camera-reported size changes,
+ensuring a later preview
+includes newly captured frames rather than stale output. Interrupted generated
+partials are cleaned up safely when GrowCam PC restarts.
+
+The vendor app has a structural advantage: its native [FunSDK media API][funsdk-media]
+consumes the camera's HEVC stream directly and exposes remote-recording,
+absolute-time seek, buffer, and playback-speed controls. A normal browser does not
+expose that proprietary player and the tested Chromium/Edge installation does not
+decode this camera's HEVC MP4 directly. Daily Rewind approximates the native seek
+operation by canceling the old DVRIP playback immediately and opening the selected
+camera time, then gives completed H.264 caches a standard browser seek index.
 
 Preview cache locations:
 
@@ -141,6 +160,8 @@ Preview cache locations:
 | Linux | `$XDG_CACHE_HOME/growcam/preview-cache` or `~/.cache/growcam/preview-cache` |
 
 The cache keeps the 24 most recently used MP4 previews.
+
+[funsdk-media]: https://github.com/xmeye/openplatform-docs/blob/7db946442bb3254402f9f20e16baba97a85e4b56/docs/en/FunSDKAndroidInterfacedescription-mediafunctionmethod.md
 
 ## Other commands
 

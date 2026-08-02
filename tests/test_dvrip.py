@@ -7,6 +7,7 @@ from __future__ import annotations
 import socket
 import threading
 from datetime import datetime
+from io import BytesIO
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
@@ -15,6 +16,7 @@ from growcam.dvrip import DVRIPClient, DVRIPError, _decode_json, _recording_time
 
 if TYPE_CHECKING:
     from pathlib import Path
+    from typing import BinaryIO
 
 
 def test_empty_password_sofia_hash_matches_camera_protocol() -> None:
@@ -56,6 +58,29 @@ def test_download_requires_absolute_camera_path(tmp_path: Path) -> None:
         _ = camera.download("relative.h264", tmp_path / "recording.h264")
 
 
+def test_download_removes_partial_file_after_stream_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    camera = DVRIPClient("192.0.2.1")
+    destination = tmp_path / "recording.h264"
+
+    def fail_stream(_filename: str, output: BinaryIO) -> int:
+        _ = output.write(b"partial media")
+        raise DVRIPError("camera stopped")
+
+    monkeypatch.setattr(camera, "stream_download", fail_stream)
+
+    with pytest.raises(DVRIPError, match="camera stopped"):
+        _ = camera.download(
+            "/idea0/2026-07-31/001/23.40.00-23.50.00[R][@17f2][0].h264",
+            destination,
+        )
+
+    assert not destination.exists()
+    assert not destination.with_name(destination.name + ".part").exists()
+
+
 def test_require_ok_includes_camera_return_code() -> None:
     with pytest.raises(DVRIPError, match=r"Ret=101"):
         DVRIPClient._require_ok("login", {"Ret": 101})
@@ -92,11 +117,106 @@ def test_config_set_uses_config_write_command(monkeypatch: pytest.MonkeyPatch) -
 
 
 class _FakeDataSocket:
-    def settimeout(self, _seconds: float) -> None:
+    def __init__(self) -> None:
+        self.timeouts: list[float] = []
+
+    def settimeout(self, seconds: float) -> None:
         """Accept the playback timeout configuration."""
+        self.timeouts.append(seconds)
 
     def close(self) -> None:
         """Accept socket cleanup."""
+
+
+def test_stream_download_writes_until_explicit_end(monkeypatch: pytest.MonkeyPatch) -> None:
+    camera = DVRIPClient("192.0.2.1")
+    camera._socket = socket.socket()
+    data_socket = _FakeDataSocket()
+    responses: list[tuple[int, bytes, bool]] = [
+        (1425, b'{"Ret":100}', False),
+        (1426, b"complete media", True),
+    ]
+    sent_packets: list[dict[str, Any]] = []
+    control_requests: list[dict[str, Any]] = []
+
+    def fake_connect(*_args: Any, **_kwargs: Any) -> socket.socket:
+        return cast("socket.socket", data_socket)
+
+    def fake_send(*_args: Any, **_kwargs: Any) -> None:
+        sent_packets.append(cast("dict[str, Any]", _args[2]))
+
+    def fake_request(_message_id: int, body: dict[str, Any], **_kwargs: Any) -> dict[str, int]:
+        control_requests.append(body)
+        return {"Ret": 100}
+
+    def fake_receive(_data_socket: socket.socket) -> tuple[int, bytes, bool]:
+        return responses.pop(0)
+
+    monkeypatch.setattr("growcam.dvrip.socket.create_connection", fake_connect)
+    monkeypatch.setattr(camera, "_send_packet", fake_send)
+    monkeypatch.setattr(camera, "_request", fake_request)
+    monkeypatch.setattr(camera, "_receive_packet", fake_receive)
+    output = BytesIO()
+
+    try:
+        written = camera.stream_download(
+            "/idea0/2026-07-31/001/01.45.29-23.44.10[E][@b9][12]._h264",
+            output,
+        )
+    finally:
+        camera.close()
+
+    assert written == len(b"complete media")
+    assert output.getvalue() == b"complete media"
+    assert sent_packets[0]["OPPlayBack"]["Action"] == "DownloadStart"
+    assert control_requests[0]["OPPlayBack"]["Action"] == "DownloadStart"
+    assert control_requests[-1]["OPPlayBack"]["Action"] == "DownloadStop"
+    assert data_socket.timeouts == [30.0]
+
+
+def test_stream_download_stops_camera_after_consumer_disconnect(monkeypatch: pytest.MonkeyPatch) -> None:
+    camera = DVRIPClient("192.0.2.1")
+    camera._socket = socket.socket()
+    responses = iter(
+        [
+            (1425, b'{"Ret":100}', False),
+            (1426, b"media after browser disconnect", False),
+        ]
+    )
+    control_actions: list[str] = []
+
+    class DisconnectedOutput:
+        def write(self, _payload: bytes) -> int:
+            raise BrokenPipeError
+
+    def fake_connect(*_args: Any, **_kwargs: Any) -> socket.socket:
+        return cast("socket.socket", _FakeDataSocket())
+
+    def fake_request(_message_id: int, body: dict[str, Any], **_kwargs: Any) -> dict[str, int]:
+        control_actions.append(str(cast("dict[str, Any]", body["OPPlayBack"])["Action"]))
+        return {"Ret": 100}
+
+    def fake_send(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    def fake_receive(_socket: socket.socket) -> tuple[int, bytes, bool]:
+        return next(responses)
+
+    monkeypatch.setattr("growcam.dvrip.socket.create_connection", fake_connect)
+    monkeypatch.setattr(camera, "_send_packet", fake_send)
+    monkeypatch.setattr(camera, "_request", fake_request)
+    monkeypatch.setattr(camera, "_receive_packet", fake_receive)
+
+    try:
+        with pytest.raises(BrokenPipeError):
+            _ = camera.stream_download(
+                "/idea0/2026-08-02/001/00.30.00-00.40.00[R][0].h264",
+                cast("BinaryIO", DisconnectedOutput()),
+            )
+    finally:
+        camera.close()
+
+    assert control_actions == ["DownloadStart", "DownloadStop"]
 
 
 def test_playback_snapshot_accepts_firmware_close_after_valid_media(
@@ -149,6 +269,7 @@ def test_playback_snapshot_accepts_firmware_close_after_valid_media(
     assert sent_packets[0]["OPPlayBack"]["Action"] == "Claim"
     assert sent_packets[0]["OPPlayBack"]["Parameter"]["PlayMode"] == "ByName"
     assert control_requests[0]["OPPlayBack"]["Action"] == "Start"
+    assert control_requests[-1]["OPPlayBack"]["Action"] == "Stop"
 
 
 def test_playback_by_time_sends_native_file_type_and_stops_at_eof(
@@ -157,6 +278,7 @@ def test_playback_by_time_sends_native_file_type_and_stops_at_eof(
 ) -> None:
     camera = DVRIPClient("192.0.2.1")
     camera._socket = socket.socket()
+    data_socket = _FakeDataSocket()
     responses = iter(
         [
             (1425, b'{"Ret":100}', False),
@@ -168,7 +290,7 @@ def test_playback_by_time_sends_native_file_type_and_stops_at_eof(
     control_requests: list[dict[str, Any]] = []
 
     def fake_connect(*_args: Any, **_kwargs: Any) -> socket.socket:
-        return cast("socket.socket", _FakeDataSocket())
+        return cast("socket.socket", data_socket)
 
     def fake_send(*_args: Any, **_kwargs: Any) -> None:
         sent_packets.append(cast("dict[str, Any]", _args[2]))
@@ -206,6 +328,8 @@ def test_playback_by_time_sends_native_file_type_and_stops_at_eof(
     assert claim["Parameter"]["StreamType"] == 0
     assert claim["Parameter"]["Value"] == 5
     assert start["Action"] == "Start"
+    assert control_requests[-1]["OPPlayBack"]["Action"] == "Stop"
+    assert data_socket.timeouts == [30.0, 1.0]
 
 
 def test_media_keepalive_sends_heartbeat_until_stopped(monkeypatch: pytest.MonkeyPatch) -> None:

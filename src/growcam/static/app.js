@@ -17,8 +17,7 @@ let selectedHistorySeconds = null;
 let historyPlaybackStartSeconds = null;
 let pendingConfig = null;
 let formIsDirty = false;
-let previewObjectUrl = null;
-let historyObjectUrl = null;
+let currentPreviewRecording = null;
 let previewRequest = null;
 let historyRequest = null;
 let appReady = false;
@@ -78,20 +77,55 @@ function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function responseError(response, fallback) {
-  try {
-    const payload = await response.json();
-    return payload.error || fallback;
-  } catch {
-    return fallback;
-  }
-}
-
 async function getJson(url, options = {}) {
   const response = await fetch(url, { cache: "no-store", ...options });
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error || `Request failed (${response.status})`);
   return payload;
+}
+
+function stopMediaLoad(video) {
+  video.pause();
+  video.removeAttribute("src");
+  video.load();
+}
+
+function loadVideoStream(video, url, signal) {
+  return new Promise((resolve, reject) => {
+    const removeReadyListeners = () => {
+      video.removeEventListener("loadeddata", handleReady);
+      video.removeEventListener("error", handleError);
+    };
+    const removeAllListeners = () => {
+      removeReadyListeners();
+      signal.removeEventListener("abort", handleAbort);
+    };
+    const handleReady = () => {
+      removeReadyListeners();
+      resolve();
+    };
+    const handleError = () => {
+      removeAllListeners();
+      reject(new Error("The browser could not start this camera preview."));
+    };
+    const handleAbort = () => {
+      removeAllListeners();
+      stopMediaLoad(video);
+      reject(new DOMException("The media load was aborted.", "AbortError"));
+    };
+    video.addEventListener("loadeddata", handleReady, { once: true });
+    video.addEventListener("error", handleError, { once: true });
+    signal.addEventListener("abort", handleAbort, { once: true });
+    video.preload = "auto";
+    video.src = url;
+    video.load();
+    if (signal.aborted) handleAbort();
+  });
+}
+
+function loadTimeLabel(startedAt) {
+  const seconds = (performance.now() - startedAt) / 1000;
+  return seconds < 10 ? `${seconds.toFixed(1)} seconds` : `${Math.round(seconds)} seconds`;
 }
 
 async function loadInfo() {
@@ -192,8 +226,12 @@ function activateTab(name, focus = false, reveal = false) {
   }
   const selectedTab = selectedButton.dataset.tab;
   setLiveFeedActive(selectedTab === "live");
-  if (selectedTab !== "rewind") historyVideo.pause();
-  if (selectedTab !== "timelapse") previewVideo.pause();
+  if (selectedTab !== "rewind" && historyRequest) {
+    historyRequest.abort();
+  }
+  if (selectedTab !== "timelapse" && previewRequest) {
+    previewRequest.abort();
+  }
   if (appReady) void ensureTabData(selectedTab);
 }
 
@@ -224,21 +262,10 @@ async function ensureTabData(name) {
   }
 }
 
-function estimatePreviewWait(bytes) {
-  const seconds = Math.max(25, bytes / (0.45 * 1024 ** 2));
-  if (seconds < 45) return "about 30 seconds";
-  if (seconds < 90) return "about a minute";
-  if (seconds < 180) return "about 2–3 minutes";
-  return "several minutes";
-}
-
 function renderHistory(payload) {
   if (historyRequest) historyRequest.abort();
   historyRequest = null;
-  if (historyObjectUrl) URL.revokeObjectURL(historyObjectUrl);
-  historyObjectUrl = null;
-  historyVideo.removeAttribute("src");
-  historyVideo.load();
+  stopMediaLoad(historyVideo);
   document.querySelector(".rewind-player").setAttribute("aria-busy", "false");
   document.querySelector("#history-placeholder").hidden = false;
   document.querySelector("#history-title").textContent = "Choose a segment below";
@@ -378,25 +405,22 @@ async function buildHistoryPreview(recording, atSeconds) {
   }
   historyPlaybackStartSeconds = atSeconds;
   card.setAttribute("aria-busy", "true");
-  const wait = estimatePreviewWait(estimatedBytes);
-  status.textContent = `Reading about ${formatSize(estimatedBytes)} from the camera for this ${historyWindowLabel()} — ${wait} on the first build. Replays use the persistent local cache.`;
+  const url = `/api/history/preview?${parameters}`;
+  const startedAt = performance.now();
+  let playbackStarted = false;
+  status.textContent = `Opening the first decoded frame now; about ${formatSize(estimatedBytes)} continues streaming into the local cache.`;
   try {
-    const response = await fetch(`/api/history/preview?${parameters}`, { cache: "no-store", signal: request.signal });
-    if (!response.ok) throw new Error(await responseError(response, `Rewind failed (${response.status})`));
-    const blob = await response.blob();
-    if (historyObjectUrl) URL.revokeObjectURL(historyObjectUrl);
-    historyObjectUrl = URL.createObjectURL(blob);
-    historyVideo.src = historyObjectUrl;
-    historyVideo.load();
+    await loadVideoStream(historyVideo, url, request.signal);
+    if (historyRequest !== request) return;
+    playbackStarted = true;
     document.querySelector("#history-placeholder").hidden = true;
-    const cached = response.headers.get("X-GrowCam-Preview-Cache") === "HIT";
-    status.textContent = `${formatSize(blob.size)} browser clip ready${cached ? " · persistent cache hit" : " · saved to the persistent cache"}.`;
     await historyVideo.play().catch(() => {});
+    status.textContent = `First frame ready in ${loadTimeLabel(startedAt)}. Completed clips are indexed automatically for instant replay and seeking.`;
   } catch (error) {
     if (!(error instanceof DOMException && error.name === "AbortError")) status.textContent = errorMessage(error);
   } finally {
     if (historyRequest === request) {
-      historyRequest = null;
+      if (!playbackStarted) historyRequest = null;
       card.setAttribute("aria-busy", "false");
     }
   }
@@ -543,28 +567,27 @@ async function buildPreview(recording) {
   const card = document.querySelector(".preview-card");
   const latestButton = document.querySelector("#preview-latest");
   const fileButtons = document.querySelectorAll("#timelapse-list button");
+  currentPreviewRecording = recording;
   latestButton.disabled = true;
   fileButtons.forEach((button) => { button.disabled = true; });
-  document.querySelector("#preview-title").textContent = recording.active ? "Building full progress preview" : "Building completed preview";
-  status.textContent = `Transferring ${formatSize(recording.sizeBytes)} of native timelapse frames from the camera, then encoding the accelerated MP4… A first build of this size is usually about 1–2 minutes; repeats use the persistent cache.`;
+  document.querySelector("#preview-title").textContent = recording.active ? "Opening progress stream" : "Opening timelapse stream";
+  status.textContent = `Opening the first decoded frame now; ${formatSize(recording.sizeBytes)} of native timelapse data continues transferring and caching in the background.`;
   card.setAttribute("aria-busy", "true");
+  const url = `/api/timelapse/preview?file=${encodeURIComponent(recording.fileName)}`;
+  const save = document.querySelector("#save-preview");
+  save.href = `${url}&download=1`;
+  save.download = `growcam-timelapse-preview-${recording.beginTime.slice(0, 10)}.mp4`;
+  save.hidden = false;
+  const startedAt = performance.now();
+  let playbackStarted = false;
   try {
-    const response = await fetch(`/api/timelapse/preview?file=${encodeURIComponent(recording.fileName)}`, { cache: "no-store", signal: request.signal });
-    if (!response.ok) throw new Error(await responseError(response, `Preview failed (${response.status})`));
-    const blob = await response.blob();
-    if (previewObjectUrl) URL.revokeObjectURL(previewObjectUrl);
-    previewObjectUrl = URL.createObjectURL(blob);
-    previewVideo.src = previewObjectUrl;
-    previewVideo.load();
+    await loadVideoStream(previewVideo, url, request.signal);
+    if (previewRequest !== request) return;
+    playbackStarted = true;
     document.querySelector("#preview-placeholder").hidden = true;
     document.querySelector("#preview-title").textContent = recording.active ? "Progress so far" : "Timelapse preview";
-    const cached = response.headers.get("X-GrowCam-Preview-Cache") === "HIT";
-    const save = document.querySelector("#save-preview");
-    save.href = previewObjectUrl;
-    save.download = `growcam-timelapse-preview-${recording.beginTime.slice(0, 10)}.mp4`;
-    save.hidden = false;
     await previewVideo.play().catch(() => {});
-    status.textContent = `${formatSize(blob.size)} · ${formatDuration(previewVideo.duration)} video covering ${displayDate(recording.beginTime)} → ${displayDate(recording.endTime)}${cached ? " · persistent cache hit" : " · saved to the persistent cache"}.`;
+    status.textContent = `First frame ready in ${loadTimeLabel(startedAt)} · covers ${displayDate(recording.beginTime)} → ${displayDate(recording.endTime)} · cold progress is paced to the camera; the completed cache replays at 25 fps.`;
   } catch (error) {
     if (!(error instanceof DOMException && error.name === "AbortError")) {
       document.querySelector("#preview-title").textContent = "Preview unavailable";
@@ -572,7 +595,7 @@ async function buildPreview(recording) {
     }
   } finally {
     if (previewRequest === request) {
-      previewRequest = null;
+      if (!playbackStarted) previewRequest = null;
       card.removeAttribute("aria-busy");
       latestButton.disabled = timelapseData?.recordings.length === 0;
       fileButtons.forEach((button) => { button.disabled = false; });
@@ -664,10 +687,23 @@ document.querySelector("#refresh-timelapse").addEventListener("click", async () 
     document.querySelector("#timelapse-file-status").textContent = errorMessage(error);
   }
 });
-document.querySelector("#preview-latest").addEventListener("click", () => { const latest = timelapseData?.recordings[0]; if (latest) buildPreview(latest); });
+document.querySelector("#preview-latest").addEventListener("click", async () => {
+  try {
+    await loadTimelapse();
+    const latest = timelapseData?.recordings[0];
+    if (latest) await buildPreview(latest);
+  } catch (error) {
+    document.querySelector("#preview-title").textContent = "Preview unavailable";
+    document.querySelector("#preview-status").textContent = errorMessage(error);
+  }
+});
 document.querySelector("#timelapse-speed").addEventListener("change", (event) => {
   previewVideo.defaultPlaybackRate = Number(event.target.value);
   previewVideo.playbackRate = Number(event.target.value);
+});
+previewVideo.addEventListener("ended", () => {
+  if (!currentPreviewRecording) return;
+  document.querySelector("#preview-status").textContent = `${formatDuration(previewVideo.duration)} video covering ${displayDate(currentPreviewRecording.beginTime)} → ${displayDate(currentPreviewRecording.endTime)} · complete preview cached locally.`;
 });
 
 for (const button of tabButtons) {
@@ -690,8 +726,6 @@ window.addEventListener("hashchange", () => activateTab(window.location.hash.sli
 window.addEventListener("beforeunload", () => {
   if (previewRequest) previewRequest.abort();
   if (historyRequest) historyRequest.abort();
-  if (previewObjectUrl) URL.revokeObjectURL(previewObjectUrl);
-  if (historyObjectUrl) URL.revokeObjectURL(historyObjectUrl);
 });
 
 liveFeed.addEventListener("load", () => {

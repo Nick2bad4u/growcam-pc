@@ -119,7 +119,7 @@
               <span id="history-position" class="file-state">— / —</span>
             </div>
             <div class="video-stage history-stage">
-              <video id="history-player" controls playsinline preload="metadata"></video>
+              <video id="history-player" controls playsinline preload="auto"></video>
               <p id="history-placeholder"><span class="nf stage-icon" aria-hidden="true"></span>Move the day scrubber or choose a recording block to build a browser-playable rewind clip.</p>
             </div>
             <div class="player-footer">
@@ -178,7 +178,7 @@
               <button id="preview-latest" class="violet-button" type="button" disabled><span class="nf" aria-hidden="true"></span> Preview latest</button>
             </div>
             <div class="video-stage preview-stage">
-              <video id="timelapse-preview" controls playsinline preload="metadata"></video>
+              <video id="timelapse-preview" controls playsinline preload="auto"></video>
               <p id="preview-placeholder"><span class="nf stage-icon" aria-hidden="true">󰔚</span>Build an accelerated MP4 from every native timelapse frame captured so far.</p>
             </div>
             <div class="player-footer">
@@ -192,6 +192,8 @@
                     <option value="0.5">0.5×</option>
                     <option value="1" selected>1×</option>
                     <option value="2">2×</option>
+                    <option value="4">4×</option>
+                    <option value="8">8×</option>
                   </select>
                 </label>
                 <a id="save-preview" class="icon-link violet-link" href="#" hidden><span class="nf" aria-hidden="true"></span> Save preview</a>
