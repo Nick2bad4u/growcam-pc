@@ -14,14 +14,16 @@ XMEye/DVRIP cameras may expose similar services, but are not yet verified.
 
 ## Highlights
 
-- Live 2560 × 1440 browser feed and one-click snapshots.
+- Responsive live browser feed, opt-in audio, and full-resolution snapshots.
 - A 24-hour daily viewer assembled from the camera's recording blocks.
-- Two-minute, five-minute, and full-block rewind previews with automatic
-  continuation through adjacent footage.
+- One-, two-, five-, and ten-minute or full-block rewind previews with recovered
+  audio and automatic continuation through adjacent footage.
 - Native time-lapse schedule, progress, reserved-partition file index, guarded
   schedule editing, and an accelerated preview of every captured frame so far.
 - Persistent, bounded preview caching so repeat playback starts quickly—even
   after GrowCam PC restarts.
+- JSON-backed application settings for cache limits, rewind defaults,
+  continuation, and native HEVC versus compatible H.264 playback.
 - A date-based Files browser for ordinary recordings and the reserved
   time-lapse partition, with filtering, preview actions, and safe downloads.
 - Direct recording downloads, live clips, and command-line camera diagnostics.
@@ -87,7 +89,9 @@ features and bundled static assets; it does not require Node.js.
 The Live tab converts the camera's RTSP stream into a browser-compatible MJPEG
 feed. GrowCam PC starts this process only while the Live tab is visible and
 stops it when you switch views, which avoids needless camera, CPU, and network
-load. The snapshot action fetches one full-resolution JPEG frame.
+load. The snapshot action fetches one full-resolution JPEG frame. Audio remains
+off until you click **Enable audio**; that user gesture starts a separate local
+RTSP-to-MP3 stream and switching tabs stops it.
 
 ### Daily rewind
 
@@ -95,11 +99,13 @@ RTSP is a live stream and cannot be rewound by itself. The **Daily rewind** tab
 queries the ordinary recording index on the microSD card and lays each block on
 a virtual 24-hour scrubber. Select a recorded moment to create a browser MP4.
 
-The two-minute default is deliberately fast and usually transfers only the
-requested playback window. Five-minute and full recording-block modes are
-available when you need more context. Enable **Continue to the next window** to
-move through adjacent footage automatically. Real gaps are shown rather than
-silently jumping to unrelated video.
+The two-minute default is deliberately fast and transfers only the requested
+camera-time window through DVRIP's download-style range mode. One-, five-, and
+ten-minute or full recording-block modes are available when you need different
+context. Enable **Continue to the next window** to move through adjacent footage
+automatically. Real gaps are shown rather than silently jumping to unrelated
+video. GrowCam PC also recovers the camera's G.711 A-law recording audio and
+encodes it as AAC alongside the video.
 
 ### Time-lapse studio
 
@@ -121,34 +127,62 @@ estimated progress. Schedule writes are guarded:
 Changing an active schedule may close the current camera file and begin a new
 one. Previewing is read-only and does not interrupt capture.
 
+**Preview latest** requests the complete current time range through the camera's
+download-style DVRIP range mode, removes the proprietary XM frame envelopes, and
+includes every captured image. A cold preview is paced at 2 fps so playback stays
+behind the camera transfer; the completed cache is losslessly retimed to 25 fps.
+The result is an accelerated progress movie, not a short excerpt from the
+beginning of the schedule.
+
 ### Files
 
-The Files tab queries a selected date across both camera indexes, then combines
-ordinary recordings and native time-lapse files in one sortable table. Filter
-by name or path, restrict the result to one media type, preview compatible
-entries in their native dashboard player, or download completed camera files.
+The Files tab queries both camera indexes, then combines ordinary recordings and
+native time-lapse files that overlap the selected date in one sortable table.
+That includes a multi-day time-lapse that began earlier. Filter by name or path,
+restrict the result to one media type, preview compatible entries in their
+native dashboard player, or download completed camera files.
 An active file remains previewable but is not offered as a download until the
 camera closes it, which avoids presenting a truncated archive as complete.
 
+### Application settings
+
+The Settings tab persists the following choices outside the package install:
+
+- preview cache size and entry-count limits;
+- the default Rewind window and automatic-continuation choice;
+- automatic native HEVC selection, forced native HEVC, or compatible H.264;
+- current cache usage and a guarded **Clear cache** action.
+
+Settings use optimistic revisions, so a stale tab cannot silently overwrite a
+newer save. Their platform locations are:
+
+| Platform | Settings file |
+| --- | --- |
+| Windows | `%LOCALAPPDATA%\GrowCam\settings.json` |
+| macOS | `~/Library/Application Support/GrowCam/settings.json` |
+| Linux | `$XDG_CONFIG_HOME/growcam/settings.json` or `~/.config/growcam/settings.json` |
+
 ## How progressive previews work
 
-The camera stores native HEVC rather than a ready-made browser video. GrowCam
-PC streams those camera packets directly through FFmpeg and returns fragmented
-H.264 MP4 as it is encoded. The first decoded frame can therefore appear while
-the remaining camera data is still transferring. Leaving or replacing a preview
-cancels that camera operation immediately instead of making the next selection
-wait behind abandoned work.
+The camera wraps native HEVC and G.711 A-law audio in proprietary XM frames
+rather than a ready-made browser video. GrowCam PC removes those envelopes while
+the camera is transferring them, detects ordinary recording rates such as 8 or
+15 fps, and returns fragmented MP4 immediately. In **Auto** mode, a browser that
+advertises working HEVC-in-MP4 support receives copied native HEVC; other
+browsers receive compatible H.264. Recorded audio is encoded as AAC in either
+case. Leaving or replacing a preview cancels that camera operation immediately
+instead of making the next selection wait behind abandoned work.
 
-A cold time-lapse preview must decode camera data before it can show its first
-frame, and transferring the complete growing file takes longer in the background. Cold
-time-lapses are paced at 2 fps, so the player does not outrun the camera's stored
-frame transfer. Once the transfer completes, GrowCam PC losslessly retimes that
-cache to 25 fps and writes a fast-start MP4 index for normal accelerated replay.
-Daily Rewind's two- and five-minute windows normally start fastest; full-block
-previews also stream progressively but have more data to finish caching. The
-timestamp below each player identifies the real-world period covered even when
-the resulting video is accelerated or the camera used an adaptive recording
-rate.
+A cold time-lapse preview requests the entire captured range through the
+camera's download-style range command, demultiplexes it, and encodes every stored
+capture. The cold progressive stream is paced at 2 fps so playback does not
+outrun the camera's measured stored-frame delivery; once transfer completes,
+the indexed cache is losslessly retimed to 25 fps for accelerated replay. The
+first fragments can play while transfer and caching continue. Daily Rewind's
+short windows normally start fastest; full-block and long-running time-lapse
+previews have more data to finish caching. The timestamp below each player
+identifies the real-world period covered even when the result is accelerated or
+the camera used an adaptive recording rate.
 
 Completed previews support HTTP byte ranges and carry a complete MP4 seek index.
 Replay and arbitrary seeking therefore do not require reading the file from the start.
@@ -158,12 +192,17 @@ includes newly captured frames rather than stale output. Interrupted generated
 partials are cleaned up safely when GrowCam PC restarts.
 
 The vendor app has a structural advantage: its native [FunSDK media API][funsdk-media]
-consumes the camera's HEVC stream directly and exposes remote-recording,
-absolute-time seek, buffer, and playback-speed controls. A normal browser does not
-expose that proprietary player and the tested Chromium/Edge installation does not
-decode this camera's HEVC MP4 directly. Daily Rewind approximates the native seek
-operation by canceling the old DVRIP playback immediately and opening the selected
-camera time, then gives completed H.264 caches a standard browser seek index.
+consumes HEVC directly and exposes remote-recording, absolute-time seek, buffer,
+sound, and playback-speed controls. Xiongmai's own [open-platform overview][xmeye-open-platform]
+describes FunSDK as the mobile SDK, MyEyeSDK as the Windows desktop SDK, and a
+legacy WebClient/NetSDK stack for web integrations. It does not provide a modern
+browser/WASM player, and its documentation does not identify a redistributable
+cross-platform binary suitable for a PyPI package, so GrowCam PC does not bundle
+proprietary vendor SDK files. Its cross-platform equivalent is DVRIP
+download-by-time, a pure-Python XM demultiplexer, and FFmpeg. Daily Rewind opens
+the selected camera time directly and gives the completed standard MP4 a seek
+index. Native HEVC avoids video transcoding when the current browser genuinely
+supports it; H.264 remains the portable fallback.
 
 Preview cache locations:
 
@@ -173,7 +212,8 @@ Preview cache locations:
 | macOS | `~/Library/Caches/GrowCam/preview-cache` |
 | Linux | `$XDG_CACHE_HOME/growcam/preview-cache` or `~/.cache/growcam/preview-cache` |
 
-The cache keeps the 24 most recently used MP4 previews.
+The default cache allows 24 previews and 4 GiB, evicting least-recently-used
+files when either limit is reached. Both limits are configurable in Settings.
 
 ## Other commands
 
@@ -202,10 +242,11 @@ growcam --host 192.168.1.50 snapshot --output snapshot.jpg
 growcam --host 192.168.1.50 clip --seconds 30 --output live.mkv
 ```
 
-Although the tested camera names ordinary recordings `.h264`, it stores an
-HEVC/H.265 elementary stream at an observed 7.5 fps. GrowCam PC remuxes that
-stream for playback. Recorded audio is not currently recovered from the
-camera's proprietary recording framing.
+Although the tested camera names ordinary recordings `.h264`, it stores HEVC in
+proprietary XM framing and changes recording rate with camera conditions; 8 and
+15 fps have both been observed. GrowCam PC detects that rate, recovers G.711
+A-law audio, and writes playable HEVC/AAC Matroska downloads. Browser previews
+use AAC audio with native HEVC when supported or H.264 otherwise.
 
 ## Troubleshooting
 
@@ -275,3 +316,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for pull request guidance and
 the [MIT License](LICENSE).
 
 [funsdk-media]: https://github.com/xmeye/openplatform-docs/blob/7db946442bb3254402f9f20e16baba97a85e4b56/docs/en/FunSDKAndroidInterfacedescription-mediafunctionmethod.md
+[xmeye-open-platform]: https://github.com/xmeye/openplatform-docs

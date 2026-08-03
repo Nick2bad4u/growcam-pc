@@ -35,6 +35,10 @@
           <span class="nf" aria-hidden="true"></span>
           <span>Files</span>
         </button>
+        <button id="tab-settings" class="app-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-settings" data-tab="settings" tabindex="-1">
+          <span class="nf" aria-hidden="true"></span>
+          <span>Settings</span>
+        </button>
       </nav>
 
       <section id="panel-live" class="tab-panel" role="tabpanel" aria-labelledby="tab-live">
@@ -48,8 +52,12 @@
             </p>
           </div>
           <div class="viewer-bar">
-            <span><span class="nf" aria-hidden="true"></span> Live · 2560 × 1440</span>
-            <a class="icon-link" href="/snapshot.jpg" download="growcam-snapshot.jpg"><span class="nf" aria-hidden="true"></span> Snapshot</a>
+            <span><span class="nf" aria-hidden="true"></span> Live · <span id="live-resolution">connecting</span> <span id="live-audio-state">· audio off</span></span>
+            <div class="viewer-actions">
+              <audio id="live-audio" data-src="/stream.mp3" preload="none"></audio>
+              <button id="live-audio-toggle" class="compact" type="button"><span class="nf" aria-hidden="true">󰝟</span> Enable audio</button>
+              <a class="icon-link" href="/snapshot.jpg" download="growcam-snapshot.jpg"><span class="nf" aria-hidden="true"></span> Snapshot</a>
+            </div>
           </div>
         </section>
 
@@ -99,8 +107,10 @@
             <label class="window-control" for="history-window">
               <span>Preview length</span>
               <select id="history-window">
+                <option value="60">1 minute</option>
                 <option value="120" selected>2 minutes</option>
                 <option value="300">5 minutes</option>
+                <option value="600">10 minutes</option>
                 <option value="full">Full recording block</option>
               </select>
             </label>
@@ -319,6 +329,92 @@
           <p id="files-status" class="empty-state muted" aria-live="polite">Loading camera files…</p>
         </article>
       </section>
+
+      <section id="panel-settings" class="app-settings section-block tab-panel" role="tabpanel" aria-labelledby="tab-settings" aria-busy="false" hidden>
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow blue"><span class="nf" aria-hidden="true"></span> LOCAL PREFERENCES</p>
+            <h2>Application settings</h2>
+            <p class="section-copy">Control generated preview storage and daily rewind behavior. These preferences stay on this PC.</p>
+          </div>
+          <div id="app-settings-state" class="status pending" role="status">Loading settings</div>
+        </div>
+
+        <div class="app-settings-grid">
+          <form id="app-settings-form" class="card app-settings-card">
+            <div class="card-heading">
+              <div>
+                <p class="card-label"><span class="nf" aria-hidden="true">󰒓</span> Interface defaults</p>
+                <h3>Playback and cache</h3>
+              </div>
+              <span class="settings-saved"><span class="nf" aria-hidden="true">󰆓</span> JSON backed</span>
+            </div>
+
+            <div class="app-settings-fields">
+              <label>
+                Preview cache budget
+                <span class="field-with-unit"><input id="cache-size-gib" type="number" min="0.125" max="128" step="0.125" required /><span>GiB</span></span>
+                <small>Generated browser previews are evicted least-recently-used when this budget is exceeded.</small>
+              </label>
+              <label>
+                Maximum cached previews
+                <input id="cache-max-entries" type="number" min="1" max="512" step="1" required />
+                <small>The byte budget remains the primary limit; this also caps small files.</small>
+              </label>
+              <label>
+                Default rewind window
+                <select id="rewind-window-setting">
+                  <option value="60">1 minute</option>
+                  <option value="120">2 minutes</option>
+                  <option value="300">5 minutes</option>
+                  <option value="600">10 minutes</option>
+                </select>
+                <small>Short windows start faster and make scrubbing more responsive.</small>
+              </label>
+              <label>
+                Rewind video codec
+                <select id="preview-video-codec-setting">
+                  <option value="auto">Auto · prefer native HEVC</option>
+                  <option value="hevc">Native HEVC · fastest</option>
+                  <option value="h264">H.264 · most compatible</option>
+                </select>
+                <small id="native-hevc-status">Checking this browser’s native HEVC decoder…</small>
+              </label>
+              <label class="toggle settings-toggle">
+                <input id="continue-playback-setting" type="checkbox" />
+                <span><strong>Continue rewind automatically</strong><small>Open the next window when the current one ends.</small></span>
+              </label>
+            </div>
+
+            <div class="form-actions settings-actions">
+              <p id="app-settings-status" class="muted" aria-live="polite">Loading saved preferences…</p>
+              <button id="save-app-settings" type="submit"><span class="nf" aria-hidden="true"></span> Save settings</button>
+            </div>
+          </form>
+
+          <article class="card cache-card">
+            <div class="card-heading">
+              <div>
+                <p class="card-label green"><span class="nf" aria-hidden="true"></span> Generated media</p>
+                <h3>Preview cache</h3>
+              </div>
+              <span id="cache-busy" class="file-state">Ready</span>
+            </div>
+            <div class="cache-usage-heading">
+              <strong id="cache-used">—</strong>
+              <span id="cache-limit">of —</span>
+            </div>
+            <progress id="cache-usage" max="1" value="0">0%</progress>
+            <dl class="cache-details">
+              <div><dt>Cached previews</dt><dd id="cache-entry-count">—</dd></div>
+              <div><dt>Policy</dt><dd>LRU eviction</dd></div>
+              <div><dt>Storage</dt><dd>Local PC only</dd></div>
+            </dl>
+            <p class="cache-explainer">Clearing this cache removes only generated MP4 previews. Camera recordings and time-lapse files are never touched.</p>
+            <button id="show-clear-cache" class="danger-button" type="button"><span class="nf" aria-hidden="true"></span> Clear generated previews</button>
+          </article>
+        </div>
+      </section>
     </main>
 
     <dialog id="confirm-dialog">
@@ -330,6 +426,18 @@
         <div class="dialog-actions">
           <button value="cancel" type="submit">Cancel</button>
           <button id="apply-settings" value="default" type="button"><span class="nf" aria-hidden="true"></span> Apply to camera</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="cache-clear-dialog">
+      <form method="dialog" class="dialog-card">
+        <p class="eyebrow amber"><span class="nf" aria-hidden="true"></span> CLEAR LOCAL CACHE</p>
+        <h2>Remove generated previews?</h2>
+        <p class="dialog-warning">The previews can be rebuilt, but the next playback request may take longer. Files stored on the camera are unaffected.</p>
+        <div class="dialog-actions cache-dialog-actions">
+          <button value="cancel" type="submit">Cancel</button>
+          <button id="clear-cache" class="danger-button" value="default" type="button"><span class="nf" aria-hidden="true"></span> Clear cache</button>
         </div>
       </form>
     </dialog>

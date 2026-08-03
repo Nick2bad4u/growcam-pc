@@ -234,9 +234,6 @@ class DVRIPClient:
         """Write one complete camera recording directly to an open binary stream."""
         if not filename.startswith("/"):
             raise ValueError("Camera filename must be an absolute DVRIP path")
-        if self._socket is None:
-            raise DVRIPError("Client is not connected")
-
         start_time, end_time = _recording_times(filename)
         playback = {
             "Action": "DownloadStart",
@@ -244,6 +241,25 @@ class DVRIPClient:
             "StartTime": _camera_time(start_time),
             "EndTime": _camera_time(end_time),
         }
+        return self._stream_download_request(playback, output)
+
+    def stream_download_by_time(
+        self,
+        *,
+        start: datetime,
+        end: datetime,
+        output: BinaryIO,
+        file_type: int = 0,
+    ) -> int:
+        """Download a camera-time range without throttling it to playback speed."""
+        playback = self._playback_by_time_request(start, end, file_type=file_type)
+        playback["Action"] = "DownloadStart"
+        return self._stream_download_request(playback, output)
+
+    def _stream_download_request(self, playback: Mapping[str, object], output: BinaryIO) -> int:
+        """Run one OPPlayBack download request and stream its media payload."""
+        if self._socket is None:
+            raise DVRIPError("Client is not connected")
         body = {
             "Name": "OPPlayBack",
             "OPPlayBack": playback,

@@ -219,6 +219,59 @@ def test_stream_download_stops_camera_after_consumer_disconnect(monkeypatch: pyt
     assert control_actions == ["DownloadStart", "DownloadStop"]
 
 
+def test_stream_download_by_time_requests_unthrottled_native_range(monkeypatch: pytest.MonkeyPatch) -> None:
+    camera = DVRIPClient("192.0.2.1")
+    camera._socket = socket.socket()
+    data_socket = _FakeDataSocket()
+    responses = iter(
+        [
+            (1425, b'{"Ret":100}', False),
+            (1426, b"range media", True),
+        ]
+    )
+    sent_packets: list[dict[str, Any]] = []
+    control_requests: list[dict[str, Any]] = []
+
+    def fake_connect(*_args: Any, **_kwargs: Any) -> socket.socket:
+        return cast("socket.socket", data_socket)
+
+    def fake_send(*_args: Any, **_kwargs: Any) -> None:
+        sent_packets.append(cast("dict[str, Any]", _args[2]))
+
+    def fake_request(_message_id: int, body: dict[str, Any], **_kwargs: Any) -> dict[str, int]:
+        control_requests.append(body)
+        return {"Ret": 100}
+
+    def fake_receive(_data_socket: socket.socket) -> tuple[int, bytes, bool]:
+        return next(responses)
+
+    monkeypatch.setattr("growcam.dvrip.socket.create_connection", fake_connect)
+    monkeypatch.setattr(camera, "_send_packet", fake_send)
+    monkeypatch.setattr(camera, "_request", fake_request)
+    monkeypatch.setattr(camera, "_receive_packet", fake_receive)
+    output = BytesIO()
+
+    try:
+        written = camera.stream_download_by_time(
+            start=datetime(2026, 8, 2, 19, 40),
+            end=datetime(2026, 8, 2, 19, 42),
+            output=output,
+            file_type=5,
+        )
+    finally:
+        camera.close()
+
+    assert written == len(b"range media")
+    assert output.getvalue() == b"range media"
+    request = sent_packets[0]["OPPlayBack"]
+    assert request["Action"] == "DownloadStart"
+    assert request["Parameter"]["PlayMode"] == "ByTime"
+    assert request["Parameter"]["Value"] == 5
+    assert control_requests[0]["OPPlayBack"] == request
+    assert control_requests[-1]["OPPlayBack"]["Action"] == "DownloadStop"
+    assert data_socket.timeouts == [30.0]
+
+
 def test_playback_snapshot_accepts_firmware_close_after_valid_media(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

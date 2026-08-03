@@ -11,12 +11,14 @@ from dataclasses import asdict
 from datetime import datetime, timedelta
 from ipaddress import ip_address
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 from . import __version__
 from .dvrip import DVRIPClient, DVRIPError
 from .media import remux_recording, save_live_clip, snapshot
 from .web import WebConfig, serve
+from .xm_media import demux_xm_recording
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -39,7 +41,7 @@ def _parser() -> argparse.ArgumentParser:
     _ = download.add_argument(
         "--raw",
         action="store_true",
-        help="keep the camera's raw HEVC stream instead of creating an MKV file",
+        help="save demultiplexed raw HEVC video instead of creating an MKV file",
     )
     snapshot = subparsers.add_parser("snapshot", help="save one live JPEG frame")
     _ = snapshot.add_argument("--output", type=Path)
@@ -144,18 +146,28 @@ def _run_dvrip_command(args: argparse.Namespace) -> dict[str, Any]:
             }
         camera_name = Path(args.camera_file).name
         destination = args.output or (Path(camera_name) if args.raw else Path(camera_name).with_suffix(".mkv"))
-        raw_destination = (
-            Path(destination) if args.raw else Path(destination).with_name(Path(destination).name + ".raw-hevc")
-        )
-        bytes_downloaded = camera.download(args.camera_file, raw_destination)
-        if not args.raw:
-            remux_recording(raw_destination, Path(destination))
-            raw_destination.unlink()
+        output_path = Path(destination)
+        if output_path.exists():
+            raise FileExistsError(f"Destination already exists: {output_path}")
+        with TemporaryDirectory(prefix="growcam-download-") as temporary_directory:
+            temporary = Path(temporary_directory)
+            camera_stream = temporary / "camera.xm"
+            video_stream = output_path if args.raw else temporary / "camera.hevc"
+            audio_stream = temporary / "camera.alaw"
+            bytes_downloaded = camera.download(args.camera_file, camera_stream)
+            stats = demux_xm_recording(camera_stream, video_stream, audio_stream)
+            if not args.raw:
+                remux_recording(
+                    video_stream,
+                    output_path,
+                    frames_per_second=stats.frames_per_second or 15.0,
+                    audio_source=audio_stream if audio_stream.is_file() else None,
+                )
         return {
             "camera_file": args.camera_file,
             "output": str(destination),
             "bytes_downloaded": bytes_downloaded,
-            "format": "raw HEVC" if args.raw else "Matroska/HEVC video",
+            "format": "raw HEVC video" if args.raw else "Matroska/HEVC/AAC media",
         }
 
 

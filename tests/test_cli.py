@@ -11,6 +11,7 @@ from unittest.mock import Mock
 from growcam import cli
 from growcam.cli import _browser_url, _parser
 from growcam.dvrip import LoginInfo
+from growcam.xm_media import XMStreamStats
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -154,7 +155,7 @@ def test_recordings_command_forwards_search_options(
     assert json.loads(capsys.readouterr().out)["recordings"] == [{"FileName": "camera.jpg"}]
 
 
-def test_raw_download_command_keeps_camera_stream(
+def test_raw_download_command_demultiplexes_camera_stream(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -173,16 +174,99 @@ def test_raw_download_command_keeps_camera_stream(
 
         def download(self, camera_file: str, output: Path) -> int:
             assert camera_file == "/idea0/recording.h264"
-            assert output == destination
+            _ = output.write_bytes(b"camera XM")
             return 4096
 
+    def fake_demux(source: Path, video: Path, audio: Path) -> XMStreamStats:
+        assert source.read_bytes() == b"camera XM"
+        assert video == destination
+        _ = video.write_bytes(b"raw HEVC")
+        assert not audio.exists()
+        return XMStreamStats(
+            source_bytes=9,
+            video_bytes=8,
+            audio_bytes=0,
+            framed=True,
+            frames_per_second=8.0,
+        )
+
     monkeypatch.setattr(cli, "DVRIPClient", FakeCamera)
+    monkeypatch.setattr(cli, "demux_xm_recording", fake_demux)
 
     assert cli.main(["download", "/idea0/recording.h264", "--raw", "--output", str(destination)]) == 0
 
     payload = json.loads(capsys.readouterr().out)
     assert payload["bytes_downloaded"] == 4096
-    assert payload["format"] == "raw HEVC"
+    assert payload["format"] == "raw HEVC video"
+    assert destination.read_bytes() == b"raw HEVC"
+
+
+def test_playable_download_recovers_audio_and_detected_frame_rate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    destination = tmp_path / "recording.mkv"
+    observed: dict[str, object] = {}
+
+    class FakeCamera:
+        def __init__(self, *_args: object) -> None:
+            return None
+
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            return None
+
+        def download(self, camera_file: str, output: Path) -> int:
+            assert camera_file == "/idea0/recording.h264"
+            _ = output.write_bytes(b"camera XM")
+            return 8192
+
+    def fake_demux(source: Path, video: Path, audio: Path) -> XMStreamStats:
+        assert source.read_bytes() == b"camera XM"
+        _ = video.write_bytes(b"raw HEVC")
+        _ = audio.write_bytes(b"G.711 A-law")
+        return XMStreamStats(
+            source_bytes=9,
+            video_bytes=8,
+            audio_bytes=11,
+            framed=True,
+            frames_per_second=8.0,
+        )
+
+    def fake_remux(
+        source: Path,
+        output: Path,
+        *,
+        frames_per_second: float = 15.0,
+        audio_source: Path | None = None,
+    ) -> None:
+        observed.update(
+            video=source.read_bytes(),
+            destination=output,
+            frames_per_second=frames_per_second,
+            audio=None if audio_source is None else audio_source.read_bytes(),
+        )
+        _ = output.write_bytes(b"playable MKV")
+
+    monkeypatch.setattr(cli, "DVRIPClient", FakeCamera)
+    monkeypatch.setattr(cli, "demux_xm_recording", fake_demux)
+    monkeypatch.setattr(cli, "remux_recording", fake_remux)
+
+    assert cli.main(["download", "/idea0/recording.h264", "--output", str(destination)]) == 0
+
+    assert observed == {
+        "video": b"raw HEVC",
+        "destination": destination,
+        "frames_per_second": 8.0,
+        "audio": b"G.711 A-law",
+    }
+    assert destination.read_bytes() == b"playable MKV"
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["bytes_downloaded"] == 8192
+    assert payload["format"] == "Matroska/HEVC/AAC media"
 
 
 def test_clip_command_forwards_duration_and_destination(

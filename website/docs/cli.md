@@ -36,7 +36,7 @@ Pass a `FileName` returned by the recording index:
 growcam --host 192.168.1.50 download "/idea0/2026-08-02/001/12.00.00-12.10.00[R][0].h264" --output recording.mkv
 ```
 
-GrowCam names ordinary recordings `.h264`, but the tested model stores an HEVC elementary stream. GrowCam PC remuxes it to a playable MKV. Use `--raw` only when you need the original camera stream.
+GrowCam names ordinary recordings `.h264`, but the tested model wraps HEVC video and G.711 A-law audio in proprietary XM frames. GrowCam PC demultiplexes them and writes playable HEVC/AAC Matroska media. Use `--raw` only when you need the demultiplexed HEVC video elementary stream without audio.
 
 ## Snapshot and live clip
 

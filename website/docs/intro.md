@@ -11,10 +11,11 @@ GrowCam PC is a local dashboard and command-line tool for VIVOSUN GrowCam camera
 
 Use it to:
 
-- Watch live video and save snapshots.
-- Rewind continuous recordings across a 24-hour timeline.
+- Watch live video with opt-in audio and save snapshots.
+- Rewind continuous recordings with audio across a 24-hour timeline.
 - Preview native time-lapse progress and manage its schedule.
 - Browse and download files from both camera storage partitions.
+- Persist preview, cache, and playback preferences locally.
 - Inspect device, storage, and work-state data from the command line.
 
 No vendor cloud account is required. The dashboard listens only on `127.0.0.1` unless you explicitly allow a network bind.

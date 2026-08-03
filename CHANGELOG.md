@@ -5,13 +5,19 @@ All notable changes to GrowCam PC are documented here. The project follows
 
 ## [Unreleased]
 
-## [0.3.0] - 2026-08-02
+## [0.3.0] - 2026-08-03
 
 ### Added
 
 - Add a Files dashboard that combines ordinary recordings and the reserved
   time-lapse partition for a selected date, with filtering, sorting, previews,
   and safe downloads of completed files.
+- Add persistent application settings for cache byte and entry limits, Rewind
+  defaults, automatic continuation, and native HEVC versus H.264 preview mode.
+- Add opt-in live audio plus G.711 A-law recovery and AAC encoding for recording
+  previews and downloads.
+- Add browser capability detection and a native HEVC preview path that skips
+  video transcoding when supported.
 - Add strict branch coverage, Codecov coverage and JUnit uploads, distribution
   smoke tests, and documentation checks to the cross-platform CI matrix.
 - Add a private npm toolchain for repository checks, git-cliff release notes,
@@ -22,9 +28,15 @@ All notable changes to GrowCam PC are documented here. The project follows
 
 ### Changed
 
-- Reorganize the dashboard into Live, Rewind, Time-lapse, and Files tabs with
-  shorter labels, clearer state colors, and Nerd Font-enhanced icons that keep
-  readable text fallbacks.
+- Reorganize the dashboard into Live, Rewind, Time-lapse, Files, and Settings
+  tabs with shorter labels, clearer state colors, and Nerd Font-enhanced icons
+  that keep readable text fallbacks.
+- Expand Daily Rewind with one-, two-, five-, and ten-minute windows, a full-day
+  scrubber, automatic adjacent-window playback, and indexed cached seeking.
+- Detect the camera's adaptive ordinary-recording frame rate instead of assuming
+  one fixed rate, and use byte-bounded media queues during progressive demuxing.
+- Use DVRIP time-range downloads for Rewind and time-lapse previews so data can
+  be encoded while it is still transferring.
 - Expand strict tests around CLI behavior, media commands, camera file indexes,
   active-file safeguards, and route dispatch.
 
@@ -32,6 +44,14 @@ All notable changes to GrowCam PC are documented here. The project follows
 
 - Avoid touching uninitialized media-cache state when a second web server
   cannot bind to an address already in use.
+- Build in-progress time-lapse previews from the complete captured range instead
+  of the short prefix returned by camera playback mode, preserving every
+  recovered capture in the accelerated result.
+- Treat abandoned progressive-media connections as normal browser cancellation
+  instead of attempting a malformed JSON 502 response after video headers were
+  sent.
+- Bound the preview cache by both size and entry count, support safe live
+  reconfiguration and clearing, and remove incomplete files after failures.
 
 ## [0.2.0] - 2026-08-02
 

@@ -1,11 +1,14 @@
 const connection = document.querySelector("#connection");
 const timelapseForm = document.querySelector("#timelapse-form");
+const appSettingsForm = document.querySelector("#app-settings-form");
 const confirmDialog = document.querySelector("#confirm-dialog");
+const cacheClearDialog = document.querySelector("#cache-clear-dialog");
 const previewVideo = document.querySelector("#timelapse-preview");
 const historyVideo = document.querySelector("#history-player");
 const historyScrubber = document.querySelector("#history-scrubber");
 const historyWindow = document.querySelector("#history-window");
 const liveFeed = document.querySelector("#live-feed");
+const liveAudio = document.querySelector("#live-audio");
 const livePlaceholder = document.querySelector("#live-placeholder");
 const liveMessage = document.querySelector("#live-message");
 const tabButtons = [...document.querySelectorAll(".app-tab")];
@@ -13,11 +16,13 @@ const tabButtons = [...document.querySelectorAll(".app-tab")];
 let timelapseData = null;
 let historyData = null;
 let filesData = null;
+let appSettingsData = null;
 let selectedHistoryIndex = -1;
 let selectedHistorySeconds = null;
 let historyPlaybackStartSeconds = null;
 let pendingConfig = null;
 let formIsDirty = false;
+let appSettingsDirty = false;
 let currentPreviewRecording = null;
 let previewRequest = null;
 let historyRequest = null;
@@ -25,6 +30,18 @@ let appReady = false;
 let historyLoaded = false;
 let timelapseLoaded = false;
 let filesLoaded = false;
+
+const nativeHevcSupported = browserSupportsNativeHevc();
+const timelapseStreamToCacheScale = 2 / 25;
+
+function browserSupportsNativeHevc() {
+  const probe = document.createElement("video");
+  // Rewind previews are assigned directly to <video src>; MediaSource support
+  // and support for an arbitrary profile-level string are not sufficient. Some
+  // Chromium builds report a specific HEVC level as playable while rejecting
+  // the camera's actual stream. Require generic hvc1 decoding support instead.
+  return probe.canPlayType('video/mp4; codecs="hvc1"') !== "";
+}
 
 function hexKibibytes(value) {
   return typeof value === "string" && value.startsWith("0x") ? Number.parseInt(value, 16) : 0;
@@ -35,6 +52,10 @@ function formatSize(bytes) {
   const units = ["B", "KiB", "MiB", "GiB", "TiB"];
   const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   return `${(bytes / 1024 ** index).toFixed(index > 2 ? 1 : 0)} ${units[index]}`;
+}
+
+function formatCacheSize(bytes) {
+  return bytes === 0 ? "0 B" : formatSize(bytes);
 }
 
 function formatInterval(seconds) {
@@ -67,9 +88,11 @@ function displayDate(value) {
   return cameraDate(value).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
 }
 
-function displayTime(value) {
+function displayTime(value, includeSeconds = false) {
   if (!value) return "—";
-  return cameraDate(value).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const options = { hour: "numeric", minute: "2-digit" };
+  if (includeSeconds) options.second = "2-digit";
+  return cameraDate(value).toLocaleTimeString([], options);
 }
 
 function localDateValue(value = new Date()) {
@@ -134,6 +157,64 @@ function loadVideoStream(video, url, signal) {
   });
 }
 
+function delayWithSignal(milliseconds, signal) {
+  return new Promise((resolve, reject) => {
+    const handleAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException("The media load was aborted.", "AbortError"));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", handleAbort);
+      resolve();
+    }, milliseconds);
+    signal.addEventListener("abort", handleAbort, { once: true });
+    if (signal.aborted) handleAbort();
+  });
+}
+
+async function previewCacheState(url, signal) {
+  const probeUrl = new URL(url, window.location.href);
+  probeUrl.searchParams.set("cacheOnly", "1");
+  const response = await fetch(probeUrl, {
+    cache: "no-store",
+    headers: { Range: "bytes=0-0" },
+    signal,
+  });
+  if (response.status === 206) {
+    await response.arrayBuffer();
+    return "ready";
+  }
+  if (response.status === 202) {
+    return "building";
+  }
+  if (response.status === 404) {
+    return "missing";
+  }
+  if (!response.ok) throw new Error(`Preview cache check failed (${response.status}).`);
+  const payload = await response.json();
+  return payload.building ? "building" : "missing";
+}
+
+async function promoteCachedVideo(video, url, request, isCurrent, timestampScale, onReady) {
+  while (!request.signal.aborted && isCurrent()) {
+    const state = await previewCacheState(url, request.signal);
+    if (state === "ready") {
+      const resumeAt = Math.max(0, video.currentTime * timestampScale);
+      const shouldResume = !video.paused && !video.ended;
+      await loadVideoStream(video, url, request.signal);
+      if (!isCurrent()) return;
+      if (Number.isFinite(video.duration) && video.duration > 0) {
+        video.currentTime = Math.min(resumeAt, Math.max(0, video.duration - 0.05));
+      }
+      if (shouldResume) await video.play().catch(() => {});
+      onReady();
+      return;
+    }
+    if (state === "missing") return;
+    await delayWithSignal(750, request.signal);
+  }
+}
+
 function loadTimeLabel(startedAt) {
   const seconds = (performance.now() - startedAt) / 1000;
   return seconds < 10 ? `${seconds.toFixed(1)} seconds` : `${Math.round(seconds)} seconds`;
@@ -151,10 +232,6 @@ async function loadInfo() {
   document.querySelector("#storage-free").textContent = formatSize(freeMib * 1024 ** 2);
   document.querySelector("#storage-percent").textContent = totalMib ? `${((freeMib / totalMib) * 100).toFixed(1)}% available` : "Capacity unavailable";
   document.querySelector("#storage-window").textContent = `${partition.OldStartTime || "—"} → ${partition.NewEndTime || "—"}`;
-}
-
-function timelinePercent(value) {
-  return (secondsOfDay(value) / 86400) * 100;
 }
 
 function secondsOfDay(value) {
@@ -181,7 +258,7 @@ function recordingBounds(recording) {
   const beginDate = localDateValue(cameraDate(recording.beginTime));
   const endDate = localDateValue(cameraDate(recording.endTime));
   const rawEnd = secondsOfDay(recording.endTime);
-  const end = endDate > beginDate || rawEnd <= start ? 86400 : rawEnd;
+  const end = endDate > beginDate ? 86400 : Math.max(start, rawEnd);
   return { start, end };
 }
 
@@ -193,18 +270,25 @@ function historyRecordIndexAt(seconds) {
   });
 }
 
-function nextHistoryPointAtOrAfter(seconds) {
+function nextHistoryPointAfter(index, seconds) {
   const recordings = historyData?.recordings || [];
-  const containingIndex = historyRecordIndexAt(seconds);
-  if (containingIndex >= 0) return { index: containingIndex, seconds };
-  const nextIndex = recordings.findIndex((recording) => recordingBounds(recording).start >= seconds);
-  if (nextIndex < 0) return null;
-  return { index: nextIndex, seconds: recordingBounds(recordings[nextIndex]).start };
+  for (let nextIndex = index; nextIndex < recordings.length; nextIndex += 1) {
+    const bounds = recordingBounds(recordings[nextIndex]);
+    if (seconds < bounds.end) {
+      return { index: nextIndex, seconds: Math.max(seconds, bounds.start) };
+    }
+  }
+  return null;
 }
 
-function historyWindowLabel() {
+function historyWindowLabel(availableSeconds = null) {
   if (historyWindow.value === "full") return "full recording block";
-  return `${Number(historyWindow.value) / 60}-minute preview`;
+  const configuredSeconds = Number(historyWindow.value);
+  const previewSeconds = availableSeconds === null
+    ? configuredSeconds
+    : Math.min(configuredSeconds, Math.max(1, availableSeconds));
+  if (previewSeconds < 60) return `${Math.round(previewSeconds)}-second preview`;
+  return `${previewSeconds / 60}-minute preview`;
 }
 
 function setScrubberPosition(seconds) {
@@ -256,8 +340,43 @@ function setLiveFeedActive(active) {
     return;
   }
   liveFeed.removeAttribute("src");
+  stopLiveAudio();
   liveMessage.textContent = "Live video paused.";
   livePlaceholder.hidden = false;
+}
+
+function updateLiveAudioState(active, label) {
+  const state = document.querySelector("#live-audio-state");
+  const button = document.querySelector("#live-audio-toggle");
+  state.textContent = `· ${label}`;
+  state.className = active ? "active" : "";
+  button.innerHTML = active
+    ? '<span class="nf" aria-hidden="true">󰝟</span> Disable audio'
+    : '<span class="nf" aria-hidden="true">󰝟</span> Enable audio';
+  button.setAttribute("aria-pressed", String(active));
+}
+
+function stopLiveAudio() {
+  liveAudio.pause();
+  liveAudio.removeAttribute("src");
+  liveAudio.load();
+  updateLiveAudioState(false, "audio off");
+}
+
+async function toggleLiveAudio() {
+  if (liveAudio.hasAttribute("src")) {
+    stopLiveAudio();
+    return;
+  }
+  liveAudio.src = liveAudio.dataset.src;
+  liveAudio.load();
+  updateLiveAudioState(true, "connecting audio…");
+  try {
+    await liveAudio.play();
+  } catch (error) {
+    stopLiveAudio();
+    document.querySelector("#live-audio-state").textContent = `· ${errorMessage(error)}`;
+  }
 }
 
 async function ensureTabData(name) {
@@ -265,6 +384,7 @@ async function ensureTabData(name) {
     if (name === "rewind" && !historyLoaded) await loadHistory();
     if (name === "timelapse" && !timelapseLoaded) await loadTimelapse();
     if (name === "files" && !filesLoaded) await loadFiles();
+    if (name === "settings") await loadAppSettings();
   } catch (error) {
     if (name === "rewind") document.querySelector("#history-status").textContent = errorMessage(error);
     if (name === "timelapse") {
@@ -272,6 +392,133 @@ async function ensureTabData(name) {
       document.querySelector("#timelapse-file-status").textContent = errorMessage(error);
     }
     if (name === "files") document.querySelector("#files-status").textContent = errorMessage(error);
+    if (name === "settings") {
+      setStatus(document.querySelector("#app-settings-state"), "Settings unavailable", "error");
+      document.querySelector("#app-settings-status").textContent = errorMessage(error);
+    }
+  }
+}
+
+function renderCacheStats(cache) {
+  const maximumBytes = Math.max(1, Number(cache.maximumBytes) || 1);
+  const currentBytes = Math.max(0, Number(cache.currentBytes) || 0);
+  const usage = document.querySelector("#cache-usage");
+  usage.max = maximumBytes;
+  usage.value = Math.min(currentBytes, maximumBytes);
+  usage.textContent = `${Math.min(100, (currentBytes / maximumBytes) * 100).toFixed(1)}%`;
+  document.querySelector("#cache-used").textContent = formatCacheSize(currentBytes);
+  document.querySelector("#cache-limit").textContent = `of ${formatSize(maximumBytes)}`;
+  document.querySelector("#cache-entry-count").textContent = `${cache.entryCount} / ${cache.maximumEntries}`;
+  const busy = document.querySelector("#cache-busy");
+  busy.textContent = cache.busy ? "Building" : "Ready";
+  busy.className = `file-state${cache.busy ? " active" : ""}`;
+  document.querySelector("#show-clear-cache").disabled = cache.busy || cache.entryCount === 0;
+}
+
+function renderAppSettings(payload, forceFormRefresh = false) {
+  appSettingsData = payload;
+  const settings = payload.settings;
+  if (!appSettingsDirty || forceFormRefresh) {
+    const gibibytes = settings.cacheMaxBytes / 1024 ** 3;
+    document.querySelector("#cache-size-gib").value = String(Number(gibibytes.toFixed(3)));
+    document.querySelector("#cache-max-entries").value = String(settings.cacheMaxEntries);
+    document.querySelector("#rewind-window-setting").value = String(settings.rewindPreviewSeconds);
+    document.querySelector("#continue-playback-setting").checked = settings.continuePlayback;
+    document.querySelector("#preview-video-codec-setting").value = settings.previewVideoCodec;
+    appSettingsDirty = false;
+  }
+  historyWindow.value = String(settings.rewindPreviewSeconds);
+  document.querySelector("#history-continue").checked = settings.continuePlayback;
+  const codecStatus = document.querySelector("#native-hevc-status");
+  codecStatus.textContent = nativeHevcSupported
+    ? "Native HEVC is available; Auto skips the expensive video transcode."
+    : "Native HEVC is unavailable here; Auto uses compatible H.264.";
+  codecStatus.className = nativeHevcSupported ? "codec-available" : "codec-unavailable";
+  renderCacheStats(payload.cache);
+  setStatus(document.querySelector("#app-settings-state"), payload.persistent ? "Saved locally" : "Session defaults");
+  document.querySelector("#app-settings-status").textContent = payload.persistent
+    ? `Saved revision ${settings.revision}.`
+    : "Persistence is disabled for this server session.";
+}
+
+async function loadAppSettings(forceFormRefresh = false) {
+  const panel = document.querySelector("#panel-settings");
+  panel.setAttribute("aria-busy", "true");
+  try {
+    const payload = await getJson("/api/settings");
+    renderAppSettings(payload, forceFormRefresh);
+  } finally {
+    panel.setAttribute("aria-busy", "false");
+  }
+}
+
+function readAppSettingsForm() {
+  const cacheGibibytes = document.querySelector("#cache-size-gib").valueAsNumber;
+  const cacheMaxBytes = Math.round(cacheGibibytes * 1024 ** 3);
+  if (!Number.isSafeInteger(cacheMaxBytes)) throw new Error("Cache size is outside the supported range.");
+  return {
+    cacheMaxBytes,
+    cacheMaxEntries: document.querySelector("#cache-max-entries").valueAsNumber,
+    rewindPreviewSeconds: Number(document.querySelector("#rewind-window-setting").value),
+    continuePlayback: document.querySelector("#continue-playback-setting").checked,
+    previewVideoCodec: document.querySelector("#preview-video-codec-setting").value,
+  };
+}
+
+function resolvedPreviewVideoCodec() {
+  const preference = appSettingsData?.settings.previewVideoCodec || "auto";
+  if (preference !== "auto") return preference;
+  return nativeHevcSupported ? "hevc" : "h264";
+}
+
+async function saveAppSettings() {
+  if (!appSettingsData) return;
+  const button = document.querySelector("#save-app-settings");
+  const status = document.querySelector("#app-settings-status");
+  button.disabled = true;
+  button.textContent = "Saving…";
+  status.textContent = "Saving preferences and applying cache limits…";
+  try {
+    const payload = await getJson("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-GrowCam-Request": "1" },
+      body: JSON.stringify({
+        expectedRevision: appSettingsData.settings.revision,
+        settings: readAppSettingsForm(),
+      }),
+    });
+    appSettingsDirty = false;
+    renderAppSettings(payload, true);
+    status.textContent = "Settings saved and active.";
+  } catch (error) {
+    status.textContent = errorMessage(error);
+  } finally {
+    button.disabled = false;
+    button.innerHTML = '<span class="nf" aria-hidden="true"></span> Save settings';
+  }
+}
+
+async function clearMediaCache() {
+  const button = document.querySelector("#clear-cache");
+  const status = document.querySelector("#app-settings-status");
+  button.disabled = true;
+  button.textContent = "Clearing…";
+  try {
+    const payload = await getJson("/api/cache/clear", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-GrowCam-Request": "1" },
+      body: "{}",
+    });
+    if (appSettingsData) appSettingsData.cache = payload.cache;
+    renderCacheStats(payload.cache);
+    cacheClearDialog.close();
+    status.textContent = "Generated preview cache cleared.";
+  } catch (error) {
+    status.textContent = errorMessage(error);
+    cacheClearDialog.close();
+  } finally {
+    button.disabled = false;
+    button.innerHTML = '<span class="nf" aria-hidden="true"></span> Clear cache';
   }
 }
 
@@ -295,42 +542,53 @@ function renderHistory(payload) {
   document.querySelector("#history-day-label").textContent = cameraDate(`${payload.date}T12:00:00`).toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" });
 
   recordings.forEach((recording, index) => {
-    const start = timelinePercent(recording.beginTime);
-    let end = timelinePercent(recording.endTime);
-    if (end <= start) end = 100;
+    const bounds = recordingBounds(recording);
+    const start = (bounds.start / 86400) * 100;
+    const duration = bounds.end - bounds.start;
+    const width = (duration / 86400) * 100;
+    const includeSeconds = duration < 60;
+    const beginTime = displayTime(recording.beginTime, includeSeconds);
+    const endTime = displayTime(recording.endTime, includeSeconds);
     const segment = document.createElement("button");
     segment.type = "button";
     segment.className = `timeline-segment${recording.active ? " active" : ""}`;
     segment.style.left = `${start}%`;
-    segment.style.width = `${Math.max(end - start, 0.22)}%`;
-    segment.style.zIndex = String(Math.max(1, 1000 - Math.round((end - start) * 100)));
-    segment.title = `${displayTime(recording.beginTime)}–${displayTime(recording.endTime)} · ${formatSize(recording.sizeBytes)}`;
-    segment.setAttribute("aria-label", `Play recording ${index + 1}, ${displayTime(recording.beginTime)} to ${displayTime(recording.endTime)}`);
-    segment.addEventListener("click", () => selectHistorySegment(index, recordingBounds(recording).start));
+    segment.style.width = `${Math.max(width, 0.001)}%`;
+    segment.disabled = duration <= 0;
+    segment.title = `${beginTime}–${endTime} · ${formatSize(recording.sizeBytes)}`;
+    segment.setAttribute("aria-label", `${duration > 0 ? "Play" : "Unplayable"} recording ${index + 1}, ${beginTime} to ${endTime}`);
+    segment.addEventListener("click", () => selectHistorySegment(index, bounds.start));
     timeline.append(segment);
 
     const item = document.createElement("li");
     const button = document.createElement("button");
     button.type = "button";
     button.className = "segment-button";
+    button.disabled = duration <= 0;
     const icon = document.createElement("span");
     icon.className = "nf";
     icon.setAttribute("aria-hidden", "true");
     icon.textContent = "";
     const begin = document.createElement("strong");
-    begin.textContent = displayTime(recording.beginTime);
+    begin.textContent = beginTime;
     const endLabel = document.createElement("span");
-    endLabel.textContent = `→ ${displayTime(recording.endTime)}`;
+    endLabel.textContent = `→ ${endTime}`;
     const size = document.createElement("small");
     size.textContent = formatSize(recording.sizeBytes);
     button.append(icon, begin, endLabel, size);
-    button.addEventListener("click", () => selectHistorySegment(index, recordingBounds(recording).start));
+    button.addEventListener("click", () => selectHistorySegment(index, bounds.start));
     item.append(button);
     list.append(item);
   });
 
   const status = document.querySelector("#history-status");
-  status.textContent = recordings.length ? `${recordings.length} recording block${recordings.length === 1 ? "" : "s"} · choose a time.` : "No recordings found for this day.";
+  const unplayable = recordings.filter((recording) => {
+    const bounds = recordingBounds(recording);
+    return bounds.end <= bounds.start;
+  }).length;
+  status.textContent = recordings.length
+    ? `${recordings.length - unplayable} playable block${recordings.length - unplayable === 1 ? "" : "s"}${unplayable ? ` · ${unplayable} zero-duration camera artifact${unplayable === 1 ? "" : "s"} skipped` : ""} · choose a time.`
+    : "No recordings found for this day.";
   document.querySelector("#history-position").textContent = `— / ${recordings.length}`;
   document.querySelector("#history-previous").disabled = true;
   document.querySelector("#history-next").disabled = true;
@@ -390,7 +648,7 @@ function selectHistorySegment(index, atSeconds = null) {
   selectedHistorySeconds = requestedSeconds;
   setScrubberPosition(requestedSeconds);
   highlightHistorySelection(index);
-  document.querySelector("#history-title").textContent = `${clockForSeconds(requestedSeconds)} · ${historyWindowLabel()}`;
+  document.querySelector("#history-title").textContent = `${clockForSeconds(requestedSeconds)} · ${historyWindowLabel(bounds.end - requestedSeconds)}`;
   document.querySelector("#history-position").textContent = `${index + 1} / ${recordings.length}`;
   document.querySelector("#history-previous").disabled = index <= 0;
   document.querySelector("#history-next").disabled = index >= recordings.length - 1;
@@ -407,6 +665,8 @@ async function buildHistoryPreview(recording, atSeconds) {
   const status = document.querySelector("#history-status");
   const card = document.querySelector(".rewind-player");
   const parameters = new URLSearchParams({ file: recording.fileName });
+  const requestedVideoCodec = resolvedPreviewVideoCodec();
+  parameters.set("videoCodec", requestedVideoCodec);
   const bounds = recordingBounds(recording);
   const recordingDuration = Math.max(1, bounds.end - bounds.start);
   let estimatedBytes = recording.sizeBytes;
@@ -418,17 +678,46 @@ async function buildHistoryPreview(recording, atSeconds) {
   }
   historyPlaybackStartSeconds = atSeconds;
   card.setAttribute("aria-busy", "true");
-  const url = `/api/history/preview?${parameters}`;
   const startedAt = performance.now();
   let playbackStarted = false;
+  let usedCompatibleFallback = false;
+  let previewUrl = `/api/history/preview?${parameters}`;
+  let cacheState = "missing";
   status.textContent = `Streaming about ${formatSize(estimatedBytes)}…`;
   try {
-    await loadVideoStream(historyVideo, url, request.signal);
+    try {
+      cacheState = await previewCacheState(previewUrl, request.signal);
+      await loadVideoStream(historyVideo, previewUrl, request.signal);
+    } catch (error) {
+      const preference = appSettingsData?.settings.previewVideoCodec || "auto";
+      if (request.signal.aborted || requestedVideoCodec !== "hevc" || preference !== "auto") throw error;
+      usedCompatibleFallback = true;
+      stopMediaLoad(historyVideo);
+      parameters.set("videoCodec", "h264");
+      previewUrl = `/api/history/preview?${parameters}`;
+      status.textContent = "Native HEVC did not play; retrying compatible H.264…";
+      cacheState = await previewCacheState(previewUrl, request.signal);
+      await loadVideoStream(historyVideo, previewUrl, request.signal);
+    }
     if (historyRequest !== request) return;
     playbackStarted = true;
     document.querySelector("#history-placeholder").hidden = true;
     await historyVideo.play().catch(() => {});
-    status.textContent = `Ready in ${loadTimeLabel(startedAt)} · cached when complete.`;
+    status.textContent = `${usedCompatibleFallback ? "Compatible H.264 fallback · " : ""}Ready in ${loadTimeLabel(startedAt)} · cached when complete.`;
+    if (cacheState === "missing") {
+      void promoteCachedVideo(
+        historyVideo,
+        previewUrl,
+        request,
+        () => historyRequest === request,
+        1,
+        () => { status.textContent = "Indexed cache ready · full seek bar and audio available."; },
+      ).catch((error) => {
+        if (!(error instanceof DOMException && error.name === "AbortError") && historyRequest === request) {
+          status.textContent = `Preview is playing, but its seek index is unavailable: ${errorMessage(error)}`;
+        }
+      });
+    }
   } catch (error) {
     if (!(error instanceof DOMException && error.name === "AbortError")) status.textContent = errorMessage(error);
   } finally {
@@ -713,14 +1002,30 @@ async function buildPreview(recording) {
   save.hidden = false;
   const startedAt = performance.now();
   let playbackStarted = false;
+  let cacheState = "missing";
   try {
+    cacheState = await previewCacheState(url, request.signal);
     await loadVideoStream(previewVideo, url, request.signal);
     if (previewRequest !== request) return;
     playbackStarted = true;
     document.querySelector("#preview-placeholder").hidden = true;
     document.querySelector("#preview-title").textContent = recording.active ? "Progress so far" : "Timelapse preview";
     await previewVideo.play().catch(() => {});
-    status.textContent = `Ready in ${loadTimeLabel(startedAt)} · ${displayDate(recording.beginTime)} → ${displayDate(recording.endTime)}.`;
+    status.textContent = `Ready in ${loadTimeLabel(startedAt)} · playing every stored capture from ${displayDate(recording.beginTime)} → ${displayDate(recording.endTime)}.`;
+    if (cacheState === "missing") {
+      void promoteCachedVideo(
+        previewVideo,
+        url,
+        request,
+        () => previewRequest === request,
+        timelapseStreamToCacheScale,
+        () => { status.textContent = "Complete 25 fps preview cached · smooth replay and seeking ready."; },
+      ).catch((error) => {
+        if (!(error instanceof DOMException && error.name === "AbortError") && previewRequest === request) {
+          status.textContent = `Preview is playing, but its accelerated cache is unavailable: ${errorMessage(error)}`;
+        }
+      });
+    }
   } catch (error) {
     if (!(error instanceof DOMException && error.name === "AbortError")) {
       document.querySelector("#preview-title").textContent = "Preview unavailable";
@@ -739,7 +1044,7 @@ async function buildPreview(recording) {
 async function refresh() {
   setStatus(connection, "Connecting", "pending");
   try {
-    await loadInfo();
+    await Promise.all([loadInfo(), loadAppSettings()]);
     setStatus(connection, "Connected locally");
     appReady = true;
     const activeTab = tabButtons.find((button) => button.getAttribute("aria-selected") === "true");
@@ -753,6 +1058,16 @@ async function refresh() {
 timelapseForm.addEventListener("input", () => {
   formIsDirty = true;
   document.querySelector("#settings-status").textContent = "Unsaved schedule changes.";
+});
+
+appSettingsForm.addEventListener("input", () => {
+  appSettingsDirty = true;
+  document.querySelector("#app-settings-status").textContent = "Unsaved application settings.";
+});
+appSettingsForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (!appSettingsForm.reportValidity()) return;
+  void saveAppSettings();
 });
 timelapseForm.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -820,10 +1135,13 @@ historyVideo.addEventListener("ended", () => {
   const selectedRecording = recordings[selectedHistoryIndex];
   if (!selectedRecording) return;
   const nextSeconds = Math.min(historyPlaybackStartSeconds + Number(historyWindow.value), recordingBounds(selectedRecording).end);
-  const nextPoint = nextHistoryPointAtOrAfter(nextSeconds);
+  const nextPoint = nextHistoryPointAfter(selectedHistoryIndex, nextSeconds);
   if (nextPoint) selectHistorySegment(nextPoint.index, nextPoint.seconds);
 });
 document.querySelector("#apply-settings").addEventListener("click", applySettings);
+document.querySelector("#live-audio-toggle").addEventListener("click", () => void toggleLiveAudio());
+document.querySelector("#show-clear-cache").addEventListener("click", () => cacheClearDialog.showModal());
+document.querySelector("#clear-cache").addEventListener("click", () => void clearMediaCache());
 document.querySelector("#refresh-timelapse").addEventListener("click", async () => {
   timelapseLoaded = false;
   try {
@@ -849,7 +1167,11 @@ document.querySelector("#timelapse-speed").addEventListener("change", (event) =>
 });
 previewVideo.addEventListener("ended", () => {
   if (!currentPreviewRecording) return;
-  document.querySelector("#preview-status").textContent = `${formatDuration(previewVideo.duration)} video covering ${displayDate(currentPreviewRecording.beginTime)} → ${displayDate(currentPreviewRecording.endTime)} · complete preview cached locally.`;
+  const decodedFrames = previewVideo.getVideoPlaybackQuality?.().totalVideoFrames;
+  const frameCount = Number.isFinite(decodedFrames) && decodedFrames > 0
+    ? `${decodedFrames.toLocaleString()} captured frame${decodedFrames === 1 ? "" : "s"} · `
+    : "";
+  document.querySelector("#preview-status").textContent = `${frameCount}${formatDuration(previewVideo.duration)} compressed video covering ${displayDate(currentPreviewRecording.beginTime)} → ${displayDate(currentPreviewRecording.endTime)} · complete preview cached locally.`;
 });
 
 for (const button of tabButtons) {
@@ -875,11 +1197,21 @@ window.addEventListener("beforeunload", () => {
 });
 
 liveFeed.addEventListener("load", () => {
+  const resolution = liveFeed.naturalWidth && liveFeed.naturalHeight
+    ? `${liveFeed.naturalWidth} × ${liveFeed.naturalHeight}`
+    : "connected";
+  document.querySelector("#live-resolution").textContent = resolution;
   livePlaceholder.hidden = true;
 });
 liveFeed.addEventListener("error", () => {
+  document.querySelector("#live-resolution").textContent = "unavailable";
   liveMessage.textContent = "Live feed unavailable. Check the camera connection and FFmpeg.";
   livePlaceholder.hidden = false;
+});
+liveAudio.addEventListener("playing", () => updateLiveAudioState(true, "audio live"));
+liveAudio.addEventListener("error", () => {
+  stopLiveAudio();
+  document.querySelector("#live-audio-state").textContent = "· audio unavailable";
 });
 
 activateTab(window.location.hash.slice(1) || "live");

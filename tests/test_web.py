@@ -9,6 +9,7 @@ import json
 import threading
 from datetime import datetime
 from http import HTTPStatus
+from io import BytesIO
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 from urllib.parse import urlencode
@@ -17,6 +18,7 @@ import pytest
 from typing_extensions import override
 
 from growcam import web
+from growcam.settings import settings_path
 from growcam.web import (
     GrowCamHTTPServer,
     WebConfig,
@@ -28,16 +30,19 @@ from growcam.web import (
     _history_date,
     _history_preview_range,
     _matching_recording,
+    _playable_history_recordings,
     _preview_cache_directory,
     _write_preview_chunk,
     serve,
 )
 
 if TYPE_CHECKING:
+    import subprocess
+    from collections.abc import Callable
     from datetime import tzinfo
     from io import BufferedIOBase
     from types import TracebackType
-    from typing import Self
+    from typing import BinaryIO, Self
 
 
 def test_download_name_uses_recording_timestamp_only() -> None:
@@ -83,6 +88,24 @@ def test_file_view_merges_indexes_and_guards_active_downloads() -> None:
     assert files[0]["downloadName"] == "growcam-timelapse-2026-08-02_14-00-00_14-30-00.mkv"
     assert files[1]["downloadable"] is True
     assert files[1]["sizeBytes"] == 2 * 1024**2
+
+
+def test_rewind_excludes_zero_length_camera_artifacts() -> None:
+    valid: dict[str, object] = {
+        "beginTime": "2026-08-02 02:50:00",
+        "endTime": "2026-08-02 02:52:00",
+        "fileName": "/idea0/valid[R].h264",
+        "sizeBytes": 1024,
+        "active": False,
+    }
+    zero_length = {
+        **valid,
+        "beginTime": "2026-08-02 02:52:00",
+        "endTime": "2026-08-02 02:52:00",
+        "fileName": "/idea0/zero[R].h264",
+    }
+
+    assert _playable_history_recordings([valid, zero_length]) == [valid]
 
 
 def test_camera_hex_file_length_is_kibibytes() -> None:
@@ -236,7 +259,13 @@ def test_recent_recording_metadata_avoids_a_second_camera_lookup(
 
 
 def test_address_in_use_is_reported_consistently(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fail_to_bind(_address: tuple[str, int], _config: WebConfig) -> GrowCamHTTPServer:
+    def fail_to_bind(
+        _address: tuple[str, int],
+        _config: WebConfig,
+        *,
+        settings_file: Path | None = None,
+    ) -> GrowCamHTTPServer:
+        assert settings_file == settings_path()
         raise OSError(errno.EADDRINUSE, "Address already in use")
 
     monkeypatch.setattr(web, "GrowCamHTTPServer", fail_to_bind)
@@ -264,6 +293,248 @@ def test_static_responses_have_browser_security_headers(
         assert response.getheader("X-Frame-Options") == "DENY"
         assert response.getheader("Referrer-Policy") == "no-referrer"
         assert "default-src 'self'" in (response.getheader("Content-Security-Policy") or "")
+    finally:
+        connection.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_settings_route_persists_revision_and_reconfigures_cache(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(web, "_preview_cache_directory", lambda: tmp_path / "cache")
+    settings_file = tmp_path / "config" / "settings.json"
+    server = GrowCamHTTPServer(
+        ("127.0.0.1", 0),
+        WebConfig("192.0.2.1"),
+        settings_file=settings_file,
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+    desired = {
+        "cacheMaxBytes": 256 * 1024**2,
+        "cacheMaxEntries": 7,
+        "rewindPreviewSeconds": 300,
+        "continuePlayback": False,
+        "previewVideoCodec": "auto",
+    }
+    headers = {"Content-Type": "application/json", "X-GrowCam-Request": "1"}
+    try:
+        connection.request("GET", "/api/settings")
+        initial_response = connection.getresponse()
+        initial = json.loads(initial_response.read())
+
+        assert initial_response.status == HTTPStatus.OK
+        assert initial["persistent"] is True
+        assert initial["settings"]["revision"] == 0
+
+        body = json.dumps({"expectedRevision": 0, "settings": desired})
+        connection.request("POST", "/api/settings", body=body, headers=headers)
+        update_response = connection.getresponse()
+        updated = json.loads(update_response.read())
+
+        assert update_response.status == HTTPStatus.OK
+        assert updated["settings"] == {"revision": 1, **desired}
+        assert updated["cache"]["maximumBytes"] == desired["cacheMaxBytes"]
+        assert updated["cache"]["maximumEntries"] == desired["cacheMaxEntries"]
+        assert json.loads(settings_file.read_text(encoding="utf-8"))["revision"] == 1
+
+        connection.request("POST", "/api/settings", body=body, headers=headers)
+        conflict_response = connection.getresponse()
+        conflict = json.loads(conflict_response.read())
+
+        assert conflict_response.status == HTTPStatus.CONFLICT
+        assert "current revision 1" in conflict["error"]
+    finally:
+        connection.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_cache_clear_route_removes_only_generated_previews(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cache_directory = tmp_path / "cache"
+    monkeypatch.setattr(web, "_preview_cache_directory", lambda: cache_directory)
+    server = GrowCamHTTPServer(("127.0.0.1", 0), WebConfig("192.0.2.1"))
+
+    def build_preview(destination: Path) -> None:
+        _ = destination.write_bytes(b"generated preview")
+
+    _ = server.media_cache.get_or_build("fixture", ".mp4", build_preview)
+    unrelated = cache_directory / "keep.txt"
+    _ = unrelated.write_text("not generated media", encoding="utf-8")
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+    try:
+        connection.request(
+            "POST",
+            "/api/cache/clear",
+            body="{}",
+            headers={"Content-Type": "application/json", "X-GrowCam-Request": "1"},
+        )
+        response = connection.getresponse()
+        payload = json.loads(response.read())
+
+        assert response.status == HTTPStatus.OK
+        assert payload["cache"]["entryCount"] == 0
+        assert unrelated.read_text(encoding="utf-8") == "not generated media"
+    finally:
+        connection.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_history_cache_probe_reports_missing_then_serves_one_ready_byte(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(web, "_preview_cache_directory", lambda: tmp_path / "cache")
+    camera_file = "/idea0/2026-08-02/001/03.00.00-03.10.00[R][@2fc5][0].h264"
+    record: dict[str, object] = {
+        "beginTime": "2026-08-02 03:00:00",
+        "endTime": "2026-08-02 03:10:00",
+        "fileName": camera_file,
+        "sizeBytes": 20_299_776,
+        "active": False,
+    }
+    server = GrowCamHTTPServer(("127.0.0.1", 0), WebConfig("192.0.2.1"), settings_file=None)
+    server.remember_recordings([record])
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+    parameters = {
+        "file": camera_file,
+        "videoCodec": "h264",
+        "at": "2026-08-02T03:00:00",
+        "duration": "120",
+        "cacheOnly": "1",
+    }
+    request_path = f"/api/history/preview?{urlencode(parameters)}"
+    range_key = "2026-08-02T03:00:00:2026-08-02T03:02:00"
+    cache_key = (
+        f"history:{web._HISTORY_PREVIEW_VERSION}:h264:{web._recording_identity(camera_file)}:"
+        f"{record['sizeBytes']}:{range_key}"
+    )
+
+    def build_cached_preview(destination: Path) -> None:
+        _ = destination.write_bytes(b"preview")
+
+    try:
+        connection.request("GET", request_path, headers={"Range": "bytes=0-0"})
+        missing_response = connection.getresponse()
+        missing = json.loads(missing_response.read())
+
+        assert missing_response.status == HTTPStatus.OK
+        assert missing == {"ready": False, "building": False}
+
+        preview, cache_hit = server.media_cache.get_or_build(
+            cache_key,
+            ".mp4",
+            build_cached_preview,
+        )
+        assert cache_hit is False
+        assert preview.read_bytes() == b"preview"
+
+        connection.request("GET", request_path, headers={"Range": "bytes=0-0"})
+        ready_response = connection.getresponse()
+
+        assert ready_response.status == HTTPStatus.PARTIAL_CONTENT
+        assert ready_response.getheader("Content-Range") == "bytes 0-0/7"
+        assert ready_response.read() == b"p"
+    finally:
+        connection.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_timelapse_preview_downloads_the_complete_range_without_playback_throttling(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    camera_file = "/idea0/2026-07-31/001/01.45.29-19.54.08[E][@10a][12]._h264"
+    record: dict[str, object] = {
+        "beginTime": "2026-07-31 01:45:29",
+        "endTime": "2026-08-02 19:54:08",
+        "fileName": camera_file,
+        "sizeBytes": 70_558_720,
+        "active": True,
+    }
+    observed: dict[str, object] = {}
+
+    class TimelapseCamera:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(
+            self,
+            exception_type: type[BaseException] | None,
+            exception: BaseException | None,
+            traceback: TracebackType | None,
+        ) -> None:
+            return None
+
+        def stream_download_by_time(
+            self,
+            *,
+            start: datetime,
+            end: datetime,
+            output: BinaryIO,
+            file_type: int = 0,
+        ) -> int:
+            observed.update(start=start, end=end, file_type=file_type)
+            return output.write(b"complete XM range")
+
+    def open_camera(_handler: web.GrowCamHandler) -> TimelapseCamera:
+        return TimelapseCamera()
+
+    def build_preview(
+        handler: web.GrowCamHandler,
+        destination: Path,
+        source: Callable[[BinaryIO], int],
+        **options: object,
+    ) -> None:
+        source_output = BytesIO()
+        assert source(source_output) == len(b"complete XM range")
+        assert source_output.getvalue() == b"complete XM range"
+        observed.update({"recover_audio": False, "video_codec": "h264", **options})
+        _ = destination.write_bytes(b"browser preview")
+        handler.send_response(HTTPStatus.NO_CONTENT)
+        handler.send_header("Content-Length", "0")
+        handler.end_headers()
+
+    monkeypatch.setattr(web, "_preview_cache_directory", lambda: tmp_path / "cache")
+    monkeypatch.setattr(web.GrowCamHandler, "_camera", open_camera)
+    monkeypatch.setattr(web.GrowCamHandler, "_build_streaming_preview", build_preview)
+    server = GrowCamHTTPServer(("127.0.0.1", 0), WebConfig("192.0.2.1"), settings_file=None)
+    server.remember_recordings([record])
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+    try:
+        connection.request("GET", f"/api/timelapse/preview?{urlencode({'file': camera_file})}")
+        response = connection.getresponse()
+
+        assert response.status == HTTPStatus.NO_CONTENT
+        assert response.read() == b""
+        assert observed == {
+            "start": datetime(2026, 7, 31, 1, 45, 29),
+            "end": datetime(2026, 8, 2, 19, 54, 8),
+            "file_type": 5,
+            "frames_per_second": 2.0,
+            "cached_frames_per_second": 25.0,
+            "disposition": 'inline; filename="growcam-timelapse-2026-07-31_01-45-29_19-54-08-preview.mp4"',
+            "recover_audio": False,
+            "video_codec": "h264",
+        }
     finally:
         connection.close()
         server.shutdown()
@@ -300,6 +571,56 @@ def test_files_route_returns_the_selected_camera_index(
     finally:
         connection.close()
         server.shutdown()
+        server.server_close()
+
+
+def test_live_audio_flushes_available_mp3_bytes_without_waiting_for_a_full_buffer(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class AvailableOutput(BytesIO):
+        @override
+        def read(self, size: int | None = -1) -> bytes:
+            raise AssertionError(f"buffered read({size}) would delay low-bitrate live audio")
+
+    class AudioProcess:
+        def __init__(self) -> None:
+            self.stdout = AvailableOutput(b"first-mp3-frame")
+            self.terminated = False
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+        def wait(self, timeout: float | None = None) -> int:
+            assert timeout == 5
+            return 0
+
+        def kill(self) -> None:
+            raise AssertionError("the completed audio process should not be killed")
+
+    process = AudioProcess()
+
+    def start_audio(_host: str, _username: str, _password: str) -> subprocess.Popen[bytes]:
+        return cast("subprocess.Popen[bytes]", process)
+
+    monkeypatch.setattr(web, "_preview_cache_directory", lambda: tmp_path)
+    monkeypatch.setattr(web, "start_live_audio", start_audio)
+    server = GrowCamHTTPServer(("127.0.0.1", 0), WebConfig("192.0.2.1"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+    try:
+        connection.request("GET", "/stream.mp3")
+        response = connection.getresponse()
+
+        assert response.status == HTTPStatus.OK
+        assert response.getheader("Content-Type") == "audio/mpeg"
+        assert response.read() == b"first-mp3-frame"
+        assert process.terminated is True
+    finally:
+        connection.close()
+        server.shutdown()
+        thread.join(timeout=5)
         server.server_close()
         thread.join(timeout=5)
 
@@ -418,9 +739,14 @@ def test_files_route_queries_both_camera_partitions(  # noqa: C901 - integration
         payload = json.loads(response.read())
 
         assert response.status == HTTPStatus.OK
-        assert payload["summary"] == {"count": 3, "recordings": 2, "timelapses": 1, "sizeBytes": 3670016}
-        assert [item["kind"] for item in payload["files"]] == ["recording", "timelapse", "recording"]
-        assert [item["downloadable"] for item in payload["files"]] == [False, True, True]
+        assert payload["summary"] == {"count": 4, "recordings": 2, "timelapses": 2, "sizeBytes": 4456448}
+        assert [item["kind"] for item in payload["files"]] == [
+            "recording",
+            "timelapse",
+            "recording",
+            "timelapse",
+        ]
+        assert [item["downloadable"] for item in payload["files"]] == [False, True, True, False]
 
         active_file = payload["files"][0]["fileName"]
         connection.request("GET", f"/api/download?{urlencode({'file': active_file})}")
