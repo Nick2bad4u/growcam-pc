@@ -5,6 +5,27 @@ All notable changes to GrowCam PC are documented here. The project follows
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-08-04
+
+### Added
+
+- Add a remembered SD/FHD live-view selector backed by the GrowCam C4's real
+  RTSP substream and main stream profiles.
+
+### Changed
+
+- Reuse one keepalive DVRIP session across dashboard operations, reject
+  overlapping camera work instead of queueing it, and prevent a second GrowCam
+  process from opening another camera-control connection.
+- Disable automatic reconnects and repeated manual retries after control-session
+  failures; camera-side account rejections cannot be retried during the server
+  run, while transient connection failures allow one explicit retry.
+
+### Fixed
+
+- Prevent rapid Rewind, Time-lapse, Files, preview, and download actions from
+  producing duplicate control logins or queued camera transfers.
+
 ## [1.0.0] - 2026-08-03
 
 ### Added
@@ -128,4 +149,5 @@ All notable changes to GrowCam PC are documented here. The project follows
 [0.2.0]: https://github.com/Nick2bad4u/growcam-pc/compare/v0.1.0...v0.2.0
 [0.3.0]: https://github.com/Nick2bad4u/growcam-pc/compare/v0.2.0...v0.3.0
 [1.0.0]: https://github.com/Nick2bad4u/growcam-pc/compare/v0.3.0...v1.0.0
-[Unreleased]: https://github.com/Nick2bad4u/growcam-pc/compare/v1.0.0...HEAD
+[1.1.0]: https://github.com/Nick2bad4u/growcam-pc/compare/v1.0.0...v1.1.0
+[Unreleased]: https://github.com/Nick2bad4u/growcam-pc/compare/v1.1.0...HEAD
