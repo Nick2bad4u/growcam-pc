@@ -22,10 +22,12 @@ if TYPE_CHECKING:
     import pytest
 
 
-def test_default_camera_and_browser_bind_are_local() -> None:
+def test_camera_address_has_no_machine_specific_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GROWCAM_HOST", raising=False)
+
     arguments = _parser().parse_args(["web"])
 
-    assert arguments.host == "192.168.1.137"
+    assert arguments.host is None
     assert arguments.listen == "127.0.0.1"
     assert arguments.http_port == 8876
     assert arguments.open_browser is True
@@ -49,12 +51,26 @@ def test_password_can_come_from_environment(monkeypatch: pytest.MonkeyPatch) -> 
 
 def test_camera_identity_can_come_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GROWCAM_HOST", "192.0.2.8")
+    monkeypatch.setenv("GROWCAM_PORT", "34568")
     monkeypatch.setenv("GROWCAM_USERNAME", "grower")
 
     arguments = _parser().parse_args(["info"])
 
     assert arguments.host == "192.0.2.8"
+    assert arguments.port == 34568
     assert arguments.username == "grower"
+
+
+def test_missing_camera_address_has_an_actionable_error(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("GROWCAM_HOST", raising=False)
+
+    assert cli.main(["info"]) == 1
+
+    assert capsys.readouterr().out == (
+        "growcam: Camera address required. Pass --host ADDRESS before the command or set GROWCAM_HOST.\n"
+    )
 
 
 def test_web_browser_can_be_disabled() -> None:
@@ -69,7 +85,7 @@ def test_wildcard_bind_has_a_reachable_local_browser_url() -> None:
 
 
 def test_remote_web_bind_requires_explicit_consent(capsys: pytest.CaptureFixture[str]) -> None:
-    assert cli.main(["web", "--listen", "0.0.0.0", "--no-open"]) == 1  # noqa: S104
+    assert cli.main(["--host", "192.0.2.8", "web", "--listen", "0.0.0.0", "--no-open"]) == 1  # noqa: S104
     assert "without --allow-remote" in capsys.readouterr().out
 
 
@@ -85,7 +101,7 @@ def test_snapshot_command_writes_the_requested_file(
 
     monkeypatch.setattr(cli, "snapshot", fake_snapshot)
 
-    assert cli.main(["snapshot", "--output", str(destination)]) == 0
+    assert cli.main(["--host", "192.0.2.8", "snapshot", "--output", str(destination)]) == 0
 
     assert destination.read_bytes() == b"jpeg"
     assert json.loads(capsys.readouterr().out) == {"output": str(destination)}
@@ -149,7 +165,7 @@ def test_recordings_command_forwards_search_options(
 
     monkeypatch.setattr(cli, "DVRIPClient", FakeCamera)
 
-    assert cli.main(["recordings", "--hours", "2", "--channel", "3", "--type", "jpg"]) == 0
+    assert cli.main(["--host", "192.0.2.8", "recordings", "--hours", "2", "--channel", "3", "--type", "jpg"]) == 0
 
     assert observed == {"hours": 2.0, "channel": 3, "file_type": "jpg"}
     assert json.loads(capsys.readouterr().out)["recordings"] == [{"FileName": "camera.jpg"}]
@@ -193,7 +209,10 @@ def test_raw_download_command_demultiplexes_camera_stream(
     monkeypatch.setattr(cli, "DVRIPClient", FakeCamera)
     monkeypatch.setattr(cli, "demux_xm_recording", fake_demux)
 
-    assert cli.main(["download", "/idea0/recording.h264", "--raw", "--output", str(destination)]) == 0
+    assert (
+        cli.main(["--host", "192.0.2.8", "download", "/idea0/recording.h264", "--raw", "--output", str(destination)])
+        == 0
+    )
 
     payload = json.loads(capsys.readouterr().out)
     assert payload["bytes_downloaded"] == 4096
@@ -255,7 +274,7 @@ def test_playable_download_recovers_audio_and_detected_frame_rate(
     monkeypatch.setattr(cli, "demux_xm_recording", fake_demux)
     monkeypatch.setattr(cli, "remux_recording", fake_remux)
 
-    assert cli.main(["download", "/idea0/recording.h264", "--output", str(destination)]) == 0
+    assert cli.main(["--host", "192.0.2.8", "download", "/idea0/recording.h264", "--output", str(destination)]) == 0
 
     assert observed == {
         "video": b"raw HEVC",
@@ -302,7 +321,7 @@ def test_web_does_not_announce_before_bind_succeeds(
 
     monkeypatch.setattr(cli, "serve", fail_before_ready)
 
-    assert cli.main(["web"]) == 1
+    assert cli.main(["--host", "192.0.2.8", "web"]) == 1
     assert capsys.readouterr().out == "growcam: Local port is already in use\n"
 
 
@@ -326,7 +345,7 @@ def test_web_opens_default_browser_only_after_server_is_ready(
     monkeypatch.setattr("growcam.cli.threading.Timer", timer_factory)
     monkeypatch.setattr(cli, "serve", ready_server)
 
-    assert cli.main(["web"]) == 0
+    assert cli.main(["--host", "192.0.2.8", "web"]) == 0
     timer_factory.assert_called_once_with(
         0.5,
         webbrowser.open,
@@ -346,5 +365,5 @@ def test_keyboard_interrupt_stops_the_local_server(
 
     monkeypatch.setattr(cli, "serve", interrupted_server)
 
-    assert cli.main(["web", "--no-open"]) == 0
+    assert cli.main(["--host", "192.0.2.8", "web", "--no-open"]) == 0
     assert capsys.readouterr().out == "\nStopped.\n"

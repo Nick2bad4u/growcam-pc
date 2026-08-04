@@ -24,10 +24,28 @@ from .xm_media import demux_xm_recording
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     _ = parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
-    _ = parser.add_argument("--host", default=os.environ.get("GROWCAM_HOST", "192.168.1.137"))
-    _ = parser.add_argument("--port", type=int, default=34567)
-    _ = parser.add_argument("--username", default=os.environ.get("GROWCAM_USERNAME", "admin"))
-    _ = parser.add_argument("--password", default=os.environ.get("GROWCAM_PASSWORD", ""))
+    _ = parser.add_argument(
+        "--host",
+        metavar="ADDRESS",
+        default=os.environ.get("GROWCAM_HOST"),
+        help="camera LAN address (required unless GROWCAM_HOST is set)",
+    )
+    _ = parser.add_argument(
+        "--port",
+        type=int,
+        default=os.environ.get("GROWCAM_PORT", "34567"),
+        help="camera DVRIP port (env: GROWCAM_PORT; default: 34567)",
+    )
+    _ = parser.add_argument(
+        "--username",
+        default=os.environ.get("GROWCAM_USERNAME", "admin"),
+        help="camera control username (env: GROWCAM_USERNAME; default: admin)",
+    )
+    _ = parser.add_argument(
+        "--password",
+        default=os.environ.get("GROWCAM_PASSWORD", ""),
+        help="camera control password (prefer the GROWCAM_PASSWORD environment variable)",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     _ = subparsers.add_parser("info", help="show device, storage, and work-state data")
@@ -66,10 +84,18 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _require_camera_host(value: object) -> str:
+    """Return a normalized camera address or raise an actionable CLI error."""
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("Camera address required. Pass --host ADDRESS before the command or set GROWCAM_HOST.")
+    return value.strip()
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the requested GrowCam command and return a process exit code."""
     args = _parser().parse_args(argv)
     try:
+        args.host = _require_camera_host(args.host)
         if args.command in {"info", "recordings", "download"}:
             output = _run_dvrip_command(args)
         elif args.command == "snapshot":
