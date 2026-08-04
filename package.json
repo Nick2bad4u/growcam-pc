@@ -1,15 +1,22 @@
 {
   "$schema": "https://www.schemastore.org/package.json",
   "name": "growcam-pc",
-  "version": "0.3.0",
+  "version": "1.0.0",
   "private": true,
-  "description": "Local PC access tools for VIVOSUN GrowCam cameras",
+  "description": "Local dashboard, daily rewind, and time-lapse tools for the VIVOSUN GrowCam C4",
   "keywords": [
     "camera",
+    "camera-viewer",
     "dvrip",
     "growcam",
+    "growcam-c4",
+    "hevc",
+    "ip-camera",
+    "rtsp",
     "time-lapse",
-    "vivosun"
+    "vivosun",
+    "vivosun-growcam",
+    "xmeye"
   ],
   "homepage": "https://nick2bad4u.github.io/growcam-pc/",
   "bugs": {
@@ -42,7 +49,7 @@
     "lint": "npm run lint:python && npm run lint:js && npm run lint:remark && npm run lint:secretlint",
     "lint:gitleaks": "gitleaks dir --config .gitleaks.toml .",
     "lint:js": "node --check src/growcam/static/app.js",
-    "lint:lychee": "lychee --config node_modules/lychee-config-nick2bad4u/lychee.toml --exclude \"^.*pypi[.]org/project/growcam-pc/?$\" --exclude \"^https://nick2bad4u[.]github[.]io/?$\" --exclude \"^.*github[.]com/Nick2bad4u/growcam-pc/compare/v0[.]2[.]0[.][.][.]v0[.]3[.]0$\" --exclude \"^.*github[.]com/Nick2bad4u/growcam-pc/compare/v0[.]3[.]0[.][.][.]HEAD$\" README.md CHANGELOG.md CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md website",
+    "lint:lychee": "lychee --config node_modules/lychee-config-nick2bad4u/lychee.toml --exclude \"^.*pypi[.]org/project/growcam-pc/?$\" --exclude \"^https://nick2bad4u[.]github[.]io/?$\" --exclude \"^https://nick2bad4u[.]github[.]io/growcam-pc/docs/growcam-c4-setup/?$\" --exclude \"^.*github[.]com/Nick2bad4u/growcam-pc/compare/v0[.]3[.]0[.][.][.]v1[.]0[.]0$\" --exclude \"^.*github[.]com/Nick2bad4u/growcam-pc/compare/v1[.]0[.]0[.][.][.]HEAD$\" README.md CHANGELOG.md CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md website",
     "lint:lychee:smoke": "lychee --config node_modules/lychee-config-nick2bad4u/lychee.toml --dump-inputs README.md website",
     "lint:python": "uv run ruff check . && uv run ruff format --check .",
     "lint:remark": "remark . --frail --ignore-path .remarkignore",

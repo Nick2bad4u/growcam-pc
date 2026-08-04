@@ -5,6 +5,33 @@ All notable changes to GrowCam PC are documented here. The project follows
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-08-03
+
+### Added
+
+- Document first-run setup, camera-address discovery, local credential
+  handling, and safe GrowCam C4 factory-reset recovery.
+- Add product-specific site metadata and compatibility guidance so GrowCam C4
+  owners can find and evaluate the project more easily.
+
+### Changed
+
+- Mark the Python package as production/stable and establish the documented
+  dashboard, CLI, configuration, and media behavior as the 1.0 public contract.
+- Require an explicit camera address or `GROWCAM_HOST` instead of shipping a
+  developer-LAN address, and accept `GROWCAM_PORT` as a command default.
+- Keep the live RTSP view available when DVRIP camera controls cannot log in,
+  while clearly identifying which storage and playback features are unavailable.
+- Send a best-effort DVRIP logout before closing an authenticated session to
+  reduce stale camera-side sessions.
+
+### Fixed
+
+- Explain common DVRIP login rejection codes, including the GrowCam firmware's
+  `Ret=205` account lock, instead of returning only an opaque number.
+- Replace the deprecated browser unload listener with `pagehide` cleanup and
+  prevent an unavailable device-info request from hiding the working live feed.
+
 ## [0.3.0] - 2026-08-03
 
 ### Added
@@ -100,4 +127,5 @@ All notable changes to GrowCam PC are documented here. The project follows
 [0.1.0]: https://github.com/Nick2bad4u/growcam-pc/releases/tag/v0.1.0
 [0.2.0]: https://github.com/Nick2bad4u/growcam-pc/compare/v0.1.0...v0.2.0
 [0.3.0]: https://github.com/Nick2bad4u/growcam-pc/compare/v0.2.0...v0.3.0
-[Unreleased]: https://github.com/Nick2bad4u/growcam-pc/compare/v0.3.0...HEAD
+[1.0.0]: https://github.com/Nick2bad4u/growcam-pc/compare/v0.3.0...v1.0.0
+[Unreleased]: https://github.com/Nick2bad4u/growcam-pc/compare/v1.0.0...HEAD

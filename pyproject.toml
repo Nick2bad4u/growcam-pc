@@ -4,16 +4,29 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "growcam-pc"
-version = "0.3.0"
-description = "Local PC access tools for VIVOSUN GrowCam cameras"
+version = "1.0.0"
+description = "Local dashboard, daily rewind, and time-lapse tools for the VIVOSUN GrowCam C4"
 readme = "README.md"
 license = "MIT"
 authors = [{ name = "Nick2bad4u" }]
-keywords = ["camera", "dvrip", "growcam", "rtsp", "timelapse", "vivosun"]
+keywords = [
+  "camera",
+  "camera-viewer",
+  "dvrip",
+  "growcam",
+  "growcam-c4",
+  "hevc",
+  "ip-camera",
+  "rtsp",
+  "timelapse",
+  "vivosun",
+  "vivosun-growcam",
+  "xmeye",
+]
 requires-python = ">=3.11"
 dependencies = ["typing-extensions>=4.16,<5"]
 classifiers = [
-  "Development Status :: 4 - Beta",
+  "Development Status :: 5 - Production/Stable",
   "Environment :: Console",
   "Environment :: Web Environment",
   "Operating System :: OS Independent",
@@ -30,7 +43,7 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Nick2bad4u/growcam-pc"
+Homepage = "https://nick2bad4u.github.io/growcam-pc/"
 Changelog = "https://github.com/Nick2bad4u/growcam-pc/blob/main/CHANGELOG.md"
 Documentation = "https://nick2bad4u.github.io/growcam-pc/"
 Issues = "https://github.com/Nick2bad4u/growcam-pc/issues"
