@@ -198,14 +198,14 @@ jobs:
         with:
           # Docusaurus combines this origin with baseUrl; the origin alone is not a deployed page.
           # PyPI can rate-limit automated checks. The new C4 guide is deployed by
-          # this push, and the v1.0.0 compare URLs are created by the tagged release.
+          # this push, and the v1.1.0 compare URLs are created by the tagged release.
           args: >-
             --config node_modules/lychee-config-nick2bad4u/lychee.toml
             --exclude '^.*pypi[.]org/project/growcam-pc/?$'
             --exclude '^https://nick2bad4u[.]github[.]io/?$'
             --exclude '^https://nick2bad4u[.]github[.]io/growcam-pc/docs/growcam-c4-setup/?$'
-            --exclude '^.*github[.]com/Nick2bad4u/growcam-pc/compare/v0[.]3[.]0[.][.][.]v1[.]0[.]0$'
-            --exclude '^.*github[.]com/Nick2bad4u/growcam-pc/compare/v1[.]0[.]0[.][.][.]HEAD$'
+            --exclude '^.*github[.]com/Nick2bad4u/growcam-pc/compare/v1[.]0[.]0[.][.][.]v1[.]1[.]0$'
+            --exclude '^.*github[.]com/Nick2bad4u/growcam-pc/compare/v1[.]1[.]0[.][.][.]HEAD$'
             README.md CHANGELOG.md CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md website
           fail: true
         env:
