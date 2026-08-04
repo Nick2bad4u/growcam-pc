@@ -1,9 +1,28 @@
 import Heading from "@theme/Heading";
+import Head from "@docusaurus/Head";
 import Layout from "@theme/Layout";
 import Link from "@docusaurus/Link";
-import useDocusaurusContext from "@docusaurus/useDocusaurusContext";
 
 import styles from "./index.module.css";
+
+const pageDescription = "Open-source VIVOSUN GrowCam C4 desktop viewer with local live video, 24-hour rewind, time-lapse previews, and camera file downloads.";
+
+const structuredData = {
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  name: "GrowCam PC",
+  applicationCategory: "MultimediaApplication",
+  operatingSystem: "Windows, macOS, Linux",
+  description: pageDescription,
+  url: "https://nick2bad4u.github.io/growcam-pc/",
+  downloadUrl: "https://pypi.org/project/growcam-pc/",
+  isAccessibleForFree: true,
+  offers: {
+    "@type": "Offer",
+    price: "0",
+    priceCurrency: "USD",
+  },
+};
 
 const features = [
   {
@@ -56,18 +75,20 @@ function CameraMockup() {
 }
 
 function Home() {
-  const { siteConfig } = useDocusaurusContext();
   return (
-    <Layout title={siteConfig.title} description={siteConfig.tagline}>
+    <Layout title="VIVOSUN GrowCam C4 desktop viewer" description={pageDescription}>
+      <Head>
+        <script type="application/ld+json">{JSON.stringify(structuredData)}</script>
+      </Head>
       <main>
         <header className={styles.hero}>
           <div className={styles.heroGlow} />
           <div className={styles.heroInner}>
             <div className={styles.heroCopy}>
-              <p className={styles.kicker}>LOCAL-FIRST CAMERA CONTROL</p>
-              <Heading as="h1">Your GrowCam.<br /><span>Your network.</span></Heading>
+              <p className={styles.kicker}>OPEN-SOURCE GROWCAM C4 VIEWER</p>
+              <Heading as="h1">Your VIVOSUN GrowCam C4.<br /><span>On your desktop.</span></Heading>
               <p className={styles.lead}>
-                Live video, daily rewind, time-lapse progress, and camera file downloads from one private dashboard.
+                Watch live video, rewind a full day, preview time-lapse progress, and download camera files from one private local dashboard.
               </p>
               <div className={styles.actions}>
                 <Link className="button button--primary button--lg" to="/docs/getting-started">Install GrowCam PC</Link>
@@ -95,6 +116,21 @@ function Home() {
                 <p>{feature.text}</p>
               </article>
             ))}
+          </div>
+        </section>
+
+        <section className={styles.compatibilitySection}>
+          <div>
+            <p className={styles.kicker}>TESTED HARDWARE</p>
+            <Heading as="h2">Built with the VIVOSUN GrowCam C4.</Heading>
+          </div>
+          <div className={styles.compatibilityCopy}>
+            <p>
+              GrowCam PC is developed and protocol-tested with the GrowCam C4 (model VSC-GCC4, product B0D8PQQWM3). It connects directly to the camera's local RTSP and DVRIP services after initial camera setup.
+            </p>
+            <p>
+              Similar XMEye cameras may work, but are not verified. Check the <Link to="/docs/growcam-c4-setup">GrowCam C4 setup guide</Link> for tested features and credential guidance before installing.
+            </p>
           </div>
         </section>
 

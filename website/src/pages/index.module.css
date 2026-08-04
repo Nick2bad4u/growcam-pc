@@ -170,12 +170,38 @@
 }
 
 .featureSection,
+.compatibilitySection,
 .localSection {
   width: min(1180px, calc(100% - 40px));
   margin: 0 auto;
 }
 
 .featureSection { padding: 105px 0; }
+
+.compatibilitySection {
+  display: grid;
+  grid-template-columns: 0.85fr 1.15fr;
+  gap: 40px 70px;
+  margin-bottom: 105px;
+  border-top: 1px solid #263e45;
+  padding-top: 68px;
+}
+
+.compatibilitySection h2 {
+  margin: 0;
+  color: #eef7f5;
+  font-size: clamp(2rem, 4vw, 3.2rem);
+  letter-spacing: -0.05em;
+  line-height: 1.08;
+}
+
+.compatibilityCopy {
+  color: #93a9ae;
+  line-height: 1.7;
+}
+
+.compatibilityCopy p:first-child { margin-top: 0; }
+.compatibilityCopy a { font-weight: 700; }
 
 .sectionIntro {
   display: grid;
@@ -264,6 +290,7 @@
   .heroInner { min-height: auto; grid-template-columns: 1fr; padding-top: 74px; }
   .cameraShell { max-width: 620px; transform: none; }
   .featureGrid { grid-template-columns: 1fr 1fr; }
+  .compatibilitySection { grid-template-columns: 1fr; }
   .localSection { grid-template-columns: 1fr; }
   .flow { justify-content: flex-start; }
 }
@@ -271,6 +298,7 @@
 @media (max-width: 600px) {
   .heroInner,
   .featureSection,
+  .compatibilitySection,
   .localSection { width: min(100% - 24px, 1180px); }
   .heroInner { gap: 46px; padding: 60px 0 72px; }
   .heroCopy h1 { font-size: 3.6rem; }

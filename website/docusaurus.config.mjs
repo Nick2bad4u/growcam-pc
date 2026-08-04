@@ -3,7 +3,7 @@ import { themes as prismThemes } from "prism-react-renderer";
 /** @type {import('@docusaurus/types').Config} */
 const config = {
   title: "GrowCam PC",
-  tagline: "Private, local-first access to your GrowCam camera",
+  tagline: "A local desktop dashboard for the VIVOSUN GrowCam C4",
   favicon: "img/growcam-mark.svg",
   url: "https://nick2bad4u.github.io",
   baseUrl: "/growcam-pc/",
@@ -40,8 +40,16 @@ const config = {
       { name: "theme-color", content: "#071418" },
       {
         name: "description",
-        content: "Local live video, daily rewind, time-lapse previews, and camera file downloads for VIVOSUN GrowCam cameras.",
+        content: "Open-source VIVOSUN GrowCam C4 desktop viewer with local live video, 24-hour rewind, time-lapse previews, and camera file downloads.",
       },
+      {
+        name: "keywords",
+        content: "VIVOSUN GrowCam C4, GrowCam C4 PC viewer, GrowCam time-lapse, GrowCam rewind, RTSP camera viewer",
+      },
+      { name: "application-name", content: "GrowCam PC" },
+      { property: "og:type", content: "website" },
+      { property: "og:site_name", content: "GrowCam PC" },
+      { name: "twitter:card", content: "summary" },
     ],
     colorMode: {
       defaultMode: "dark",
@@ -50,11 +58,12 @@ const config = {
     navbar: {
       title: "GrowCam PC",
       logo: {
-        alt: "GrowCam PC",
+        alt: "GrowCam PC logo",
         src: "img/growcam-mark.svg",
       },
       items: [
         { type: "docSidebar", sidebarId: "guideSidebar", position: "left", label: "Guide" },
+        { to: "/docs/growcam-c4-setup", label: "GrowCam C4 setup", position: "left" },
         { to: "/docs/dashboard", label: "Dashboard", position: "left" },
         {
           href: "https://pypi.org/project/growcam-pc/",
@@ -74,6 +83,7 @@ const config = {
         {
           title: "Use GrowCam PC",
           items: [
+            { label: "GrowCam C4 setup", to: "/docs/growcam-c4-setup" },
             { label: "Install", to: "/docs/getting-started" },
             { label: "Dashboard", to: "/docs/dashboard" },
             { label: "CLI", to: "/docs/cli" },

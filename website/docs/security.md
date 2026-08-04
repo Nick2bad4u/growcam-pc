@@ -20,7 +20,7 @@ That command exposes camera controls and video to devices that can reach the com
 
 ## Credentials
 
-Prefer `GROWCAM_PASSWORD` over a password command argument so the value does not enter shell history. GrowCam PC does not send credentials to a hosted service.
+The camera's local RTSP/DVRIP account is separate from the VIVOSUN cloud account. Do not reuse the VIVOSUN account password. Prefer `GROWCAM_PASSWORD` over a password command argument so the value does not enter shell history. GrowCam PC does not send credentials to a hosted service.
 
 ## Report a vulnerability
 

@@ -1,7 +1,7 @@
 ---
 sidebar_position: 3
 title: Dashboard
-description: Use Live, Rewind, Time-lapse, Files, and Settings views.
+description: Use the GrowCam C4 Live, Rewind, Time-lapse, Files, and Settings views in GrowCam PC.
 ---
 
 # Dashboard

@@ -1,16 +1,19 @@
-# GrowCam PC
+# GrowCam PC — VIVOSUN GrowCam C4 desktop viewer
 
-[![CI](https://github.com/Nick2bad4u/growcam-pc/actions/workflows/ci.yml/badge.svg)](https://github.com/Nick2bad4u/growcam-pc/actions/workflows/ci.yml) [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776ab?logo=python&logoColor=white)](https://www.python.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-8ff5ad.svg)](LICENSE) [![Latest GitHub release.](https://flat.badgen.net/github/release/Nick2bad4u/growcam-pc?color=cyan)](https://github.com/Nick2bad4u/growcam-pc/releases) [![GitHub stars.](https://flat.badgen.net/github/stars/Nick2bad4u/growcam-pc?color=yellow)](https://github.com/Nick2bad4u/growcam-pc/stargazers) [![GitHub forks.](https://flat.badgen.net/github/forks/Nick2bad4u/growcam-pc?color=orange)](https://github.com/Nick2bad4u/growcam-pc/forks) [![GitHub open issues.](https://flat.badgen.net/github/open-issues/Nick2bad4u/growcam-pc?color=red)](https://github.com/Nick2bad4u/growcam-pc/issues) [![Codecov.](https://flat.badgen.net/codecov/github/Nick2bad4u/growcam-pc?color=blue)](https://codecov.io/gh/Nick2bad4u/growcam-pc) [![Repo Checks.](https://flat.badgen.net/github/checks/nick2bad4u/growcam-pc?color=green)](https://github.com/Nick2bad4u/growcam-pc/actions)
+[![PyPI version](https://img.shields.io/pypi/v/growcam-pc?logo=pypi&logoColor=white)](https://pypi.org/project/growcam-pc/) [![CI](https://github.com/Nick2bad4u/growcam-pc/actions/workflows/ci.yml/badge.svg)](https://github.com/Nick2bad4u/growcam-pc/actions/workflows/ci.yml) [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776ab?logo=python&logoColor=white)](https://www.python.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-8ff5ad.svg)](LICENSE) [![Latest GitHub release.](https://flat.badgen.net/github/release/Nick2bad4u/growcam-pc?color=cyan)](https://github.com/Nick2bad4u/growcam-pc/releases) [![GitHub stars.](https://flat.badgen.net/github/stars/Nick2bad4u/growcam-pc?color=yellow)](https://github.com/Nick2bad4u/growcam-pc/stargazers) [![GitHub forks.](https://flat.badgen.net/github/forks/Nick2bad4u/growcam-pc?color=orange)](https://github.com/Nick2bad4u/growcam-pc/forks) [![GitHub open issues.](https://flat.badgen.net/github/open-issues/Nick2bad4u/growcam-pc?color=red)](https://github.com/Nick2bad4u/growcam-pc/issues) [![Codecov.](https://flat.badgen.net/codecov/github/Nick2bad4u/growcam-pc?color=blue)](https://codecov.io/gh/Nick2bad4u/growcam-pc) [![Repo Checks.](https://flat.badgen.net/github/checks/nick2bad4u/growcam-pc?color=green)](https://github.com/Nick2bad4u/growcam-pc/actions)
 
-A private, local-first desktop dashboard for VIVOSUN GrowCam cameras. The
+GrowCam PC is an open-source, local-first desktop dashboard and command-line
+tool for the **VIVOSUN GrowCam C4**. It provides live video, a 24-hour daily
+viewer, native time-lapse progress, and microSD downloads without routing media
+through a third-party dashboard. The
 [documentation site](https://nick2bad4u.github.io/growcam-pc/) covers setup,
-dashboard use, commands, troubleshooting, and security. GrowCam
-PC talks directly to the camera's RTSP and DVRIP services—no vendor cloud or
-mobile app is needed for live video, device status, microSD recordings, daily
-rewind, or native time-lapse progress.
+every dashboard view, commands, troubleshooting, and security.
+Start with the model-specific [VIVOSUN GrowCam C4 setup guide][growcam-c4-setup].
 
-The project was developed against a VIVOSUN GrowCam C4 (`B0D8PQQWM3`). Other
-XMEye/DVRIP cameras may expose similar services, but are not yet verified.
+The project is developed and protocol-tested with the GrowCam C4 (model
+VSC-GCC4, product `B0D8PQQWM3`). Other XMEye/DVRIP cameras may expose similar
+services, but are not verified. GrowCam PC is an independent community project
+and is not affiliated with or endorsed by VIVOSUN.
 
 ## Highlights
 
@@ -34,8 +37,9 @@ XMEye/DVRIP cameras may expose similar services, but are not yet verified.
 ## Quick start
 
 You need [Python 3.11 or newer](https://www.python.org/downloads/),
-[uv](https://docs.astral.sh/uv/getting-started/installation/), and
-[FFmpeg](https://ffmpeg.org/download.html) on `PATH`.
+[FFmpeg and FFprobe](https://ffmpeg.org/download.html) on `PATH`, and the
+camera's local IPv4 address. Find the address in your router's connected-device
+or DHCP-client list; GrowCam PC deliberately does not scan the LAN.
 
 Install the published package as an isolated command-line tool:
 
@@ -43,8 +47,10 @@ Install the published package as an isolated command-line tool:
 uv tool install growcam-pc
 ```
 
-`pipx install growcam-pc` is an equivalent isolated installation. To test an
-unreleased commit, pass the repository URL to `uv tool install` instead.
+[`uv`](https://docs.astral.sh/uv/getting-started/installation/) is recommended,
+but `pipx install growcam-pc` is an equivalent isolated installation and
+`python -m pip install growcam-pc` works in a managed virtual environment. To
+test an unreleased commit, pass the repository URL to `uv tool install` instead.
 
 Start the dashboard with your camera's LAN address:
 
@@ -53,8 +59,11 @@ growcam --host 192.168.1.50 web
 ```
 
 GrowCam PC opens the system's default browser after the local server is ready.
-Use `web --no-open` for a terminal-only launch. If the camera uses a password,
-put it in an environment variable instead of shell history:
+Use `web --no-open` for a terminal-only launch. On the tested firmware the local
+camera-control account defaults to username `admin` with a blank password. This
+is a camera-local DVRIP account—not the email address and password used to sign
+in to the VIVOSUN app. If your camera has a local password, put it in an
+environment variable instead of shell history:
 
 ```powershell
 $env:GROWCAM_PASSWORD = Read-Host "Camera password" -MaskInput
@@ -66,8 +75,32 @@ read -rs GROWCAM_PASSWORD && export GROWCAM_PASSWORD
 growcam --host 192.168.1.50 web
 ```
 
-`GROWCAM_HOST`, `GROWCAM_USERNAME`, and `GROWCAM_PASSWORD` can all provide
-persistent command defaults. The tested camera port is `34567`.
+`GROWCAM_HOST`, `GROWCAM_PORT`, `GROWCAM_USERNAME`, and `GROWCAM_PASSWORD` can
+all provide command defaults. The tested DVRIP port is `34567`; most users do
+not need to change it.
+
+Command-line values override environment variables. The camera address is
+required unless `GROWCAM_HOST` is set; the public package intentionally has no
+machine-specific LAN address baked in. PowerShell `$env:` values remain in that
+terminal even after `Clear-Host`. Close the terminal or remove temporary test
+overrides when troubleshooting:
+
+```powershell
+Remove-Item Env:\GROWCAM_HOST, Env:\GROWCAM_PORT, Env:\GROWCAM_USERNAME, Env:\GROWCAM_PASSWORD -ErrorAction SilentlyContinue
+```
+
+Do not automate username or password guessing against the camera. Its firmware
+can lock local DVRIP access (`Ret=205`) even when the correct credentials are
+later supplied. On the tested camera the lock survived a normal power cycle and
+cleared only after a factory reset; use the vendor account-recovery path first
+when preserving camera configuration matters. If reset is necessary, follow the
+[official GrowCam C4 instructions](https://vivosun.com/support/guide/growcam-c4):
+with the camera powered, hold its physical reset button until the factory-reset
+voice prompt plays, wait for pairing mode, and add the camera to the VIVOSUN app
+again.
+
+Continue with the [GrowCam C4 setup guide][growcam-c4-setup] for the complete
+first-connection checklist and storage layout.
 
 ## Install from source
 
@@ -279,6 +312,15 @@ address in your router or vendor app, and check that TCP ports 34567 and 554 are
 not blocked by client isolation. GrowCam PC does not discover devices or relay
 traffic through the internet.
 
+### Login is rejected with `Ret=205`
+
+`Ret=205` means the camera has locked its local DVRIP user. Stop credential
+guessing and close other native or DVRIP test clients. The tested GrowCam C4
+remained locked after an ordinary power cycle; a factory reset cleared it, but
+reset the camera only after accepting that its settings and vendor-app pairing
+must be restored. Follow the [lockout recovery steps in the troubleshooting
+guide](https://nick2bad4u.github.io/growcam-pc/docs/troubleshooting).
+
 ## Security
 
 The tested camera accepted its factory `admin` account with an empty password
@@ -316,4 +358,5 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for pull request guidance and
 the [MIT License](LICENSE).
 
 [funsdk-media]: https://github.com/xmeye/openplatform-docs/blob/7db946442bb3254402f9f20e16baba97a85e4b56/docs/en/FunSDKAndroidInterfacedescription-mediafunctionmethod.md
+[growcam-c4-setup]: https://nick2bad4u.github.io/growcam-pc/docs/growcam-c4-setup
 [xmeye-open-platform]: https://github.com/xmeye/openplatform-docs

@@ -1,7 +1,7 @@
 ---
 sidebar_position: 4
 title: Command line
-description: Inspect the camera and save media without the dashboard.
+description: Inspect a VIVOSUN GrowCam C4 and save camera media from the GrowCam PC command line.
 ---
 
 # Command line
@@ -11,6 +11,8 @@ Global connection options come before the command:
 ```text
 growcam [--host HOST] [--port PORT] [--username USER] [--password PASSWORD] COMMAND
 ```
+
+`--host` is required unless `GROWCAM_HOST` is set. GrowCam PC does not ship with a machine-specific camera address.
 
 ## Camera information
 
