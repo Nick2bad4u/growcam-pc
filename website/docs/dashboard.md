@@ -8,7 +8,7 @@ description: Use the GrowCam C4 Live, Rewind, Time-lapse, Files, and Settings vi
 
 ## Live
 
-The Live view converts the camera's RTSP stream to browser-compatible MJPEG. Choose **SD** for the tested camera's 800×448 substream or **FHD** for its 2560×1440 main stream, converted to 1920×1080 for the browser. GrowCam PC remembers the choice locally and restarts only the live-video connection when it changes. The stream runs only while the tab is visible. Use **Snapshot** to save a full-resolution JPEG. Audio is opt-in: **Enable audio** starts a separate local RTSP-to-MP3 stream after the browser receives a user gesture.
+The Live view converts the camera's RTSP stream to browser-compatible MJPEG. Choose **SD** for the tested camera's 800×448 substream or **FHD** for its 2560×1440 main stream, converted to 1920×1080 for the browser. GrowCam PC remembers the choice locally and restarts only the live-video connection when it changes. The stream runs only while the tab is visible. **Pause live** disconnects video and audio until you resume; audio remains opt-in after resuming. Use **Snapshot** to save a full-resolution JPEG. **Enable audio** starts a separate local RTSP-to-MP3 stream after the browser receives a user gesture.
 
 ## Rewind
 
@@ -23,7 +23,7 @@ Short windows normally open faster because the camera transfers less data. GrowC
 
 ## Time-lapse
 
-The Time-lapse view reads the camera's native `Storage.EpitomeRecord` configuration. It shows schedule progress, estimated captures, the daily window, and files from the separately reserved time-lapse partition.
+The Time-lapse view reads the camera's native `Storage.EpitomeRecord` configuration. It shows schedule progress, estimated captures, the daily window, and files from the separately reserved time-lapse partition. Because the firmware reports only the two-thirds recording allocation, the dashboard derives and labels the C4's fixed one-third time-lapse allocation as an estimate. Time-lapse free space remains unavailable because the camera does not report it.
 
 **Preview latest** requests the complete current time range through the camera's download-style DVRIP range mode and removes the proprietary XM framing. A cold stream is paced at 2 fps so it does not outrun the camera's stored-frame delivery; the completed cache is retimed to 25 fps. It is an accelerated progress movie containing every recovered capture rather than a short excerpt. Previewing is read-only. Schedule edits require a review, revision check, read-back verification, and rollback on mismatch.
 

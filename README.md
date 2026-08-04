@@ -132,10 +132,12 @@ feed. GrowCam PC starts this process only while the Live tab is visible and
 stops it when you switch views, which avoids needless camera, CPU, and network
 load. Choose **SD** for the camera's 800×448 substream or **FHD** for its
 2560×1440 main stream, converted to a 1920×1080 browser feed to balance detail
-and local MJPEG processing cost. The choice is remembered in the browser. The
-snapshot action still fetches one full-resolution JPEG frame. Audio remains off
-until you click **Enable audio**; that user gesture starts a separate local
-RTSP-to-MP3 stream and switching tabs stops it.
+and local MJPEG processing cost. The choice is remembered in the browser. Use
+**Pause live** to disconnect both live streams without leaving the tab; resuming
+starts video again while audio remains opt-in. The snapshot action still fetches
+one full-resolution JPEG frame. Audio remains off until you click **Enable
+audio**; that user gesture starts a separate local RTSP-to-MP3 stream and
+switching tabs stops it.
 
 ### Daily rewind
 
@@ -156,7 +158,9 @@ encodes it as AAC alongside the video.
 The camera keeps native time-lapse data on a separately reserved formatted
 partition. That is why the ordinary recording partition reports less than the
 microSD card's full capacity. GrowCam PC queries both indexes and labels them
-separately.
+separately. The dashboard estimates the fixed time-lapse allocation as one-third
+of the full card from the reported two-thirds recording capacity. The firmware
+does not expose time-lapse free space, so the estimate is labeled accordingly.
 
 The Time-lapse tab reads the firmware's `Storage.EpitomeRecord` configuration
 and exposes its enabled state, interval, date range, daily capture window, and

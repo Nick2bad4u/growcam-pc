@@ -41,6 +41,7 @@ let cameraControlAvailable = false;
 let cameraControlState = null;
 let liveQuality = storedLiveQuality();
 let liveRestartTimer = null;
+let livePaused = false;
 
 const nativeHevcSupported = browserSupportsNativeHevc();
 const timelapseStreamToCacheScale = 2 / 25;
@@ -54,7 +55,7 @@ function browserSupportsNativeHevc() {
   return probe.canPlayType('video/mp4; codecs="hvc1"') !== "";
 }
 
-function hexKibibytes(value) {
+function hexMebibytes(value) {
   return typeof value === "string" && value.startsWith("0x") ? Number.parseInt(value, 16) : 0;
 }
 
@@ -274,14 +275,21 @@ function loadTimeLabel(startedAt) {
 function renderCameraInfo(info) {
   const system = info.system || {};
   const partition = info.storage?.[0]?.Partition?.[0] || {};
-  const totalMib = hexKibibytes(partition.TotalSpace);
-  const freeMib = hexKibibytes(partition.RemainSpace);
+  const totalMib = hexMebibytes(partition.TotalSpace);
+  const freeMib = hexMebibytes(partition.RemainSpace);
+  // The C4 exposes the recording allocation as two-thirds of the card. Its
+  // hidden one-third time-lapse reserve is therefore half that reported size.
+  const estimatedTimelapseMib = totalMib / 2;
   document.querySelector("#device").textContent = `${info.login?.device_type || "IPC"} · ${system.DeviceModel || "GrowCam"}`;
   document.querySelector("#firmware").textContent = system.SoftWareVersion || "Firmware unknown";
   document.querySelector("#storage-total").textContent = formatSize(totalMib * 1024 ** 2);
   document.querySelector("#storage-free").textContent = formatSize(freeMib * 1024 ** 2);
   document.querySelector("#storage-percent").textContent = totalMib ? `${((freeMib / totalMib) * 100).toFixed(1)}% available` : "Capacity unavailable";
   document.querySelector("#storage-window").textContent = `${partition.OldStartTime || "—"} → ${partition.NewEndTime || "—"}`;
+  document.querySelector("#timelapse-storage-estimate").textContent = formatSize(estimatedTimelapseMib * 1024 ** 2);
+  document.querySelector("#timelapse-storage-note").textContent = totalMib
+    ? "Estimated 1/3 card allocation · free space unavailable"
+    : "Estimate unavailable";
   cameraControlAvailable = true;
   cameraControlState = info.cameraControl || { status: "available", available: true };
   updateCameraControlTabIndicators(false);
@@ -366,6 +374,8 @@ function renderCameraControlUnavailable(error) {
   document.querySelector("#storage-free").textContent = "Unavailable";
   document.querySelector("#storage-percent").textContent = "DVRIP access required";
   document.querySelector("#storage-window").textContent = "DVRIP access required";
+  document.querySelector("#timelapse-storage-estimate").textContent = "Unavailable";
+  document.querySelector("#timelapse-storage-note").textContent = "DVRIP access required";
 
   const note = document.querySelector("#camera-control-note");
   const detail = String(cameraControlState.message || errorMessage(error)).replace(/[.\s]+$/, "");
@@ -485,16 +495,45 @@ function cancelLiveRestart() {
 }
 
 function startLiveFeed() {
-  if (document.querySelector("#panel-live").hidden || liveFeed.hasAttribute("src")) return;
+  if (livePaused || document.querySelector("#panel-live").hidden || liveFeed.hasAttribute("src")) return;
   liveMessage.textContent = `Starting ${liveQuality.toUpperCase()} live video…`;
+  document.querySelector("#live-resolution").textContent = `${liveQuality.toUpperCase()} · connecting`;
   livePlaceholder.hidden = false;
   liveFeed.src = liveStreamUrl();
+  updateLiveQualityButtons(false);
+}
+
+function updateLivePauseState() {
+  const button = document.querySelector("#live-pause-toggle");
+  button.innerHTML = livePaused
+    ? '<span class="nf" aria-hidden="true"></span> Resume live'
+    : '<span class="nf" aria-hidden="true"></span> Pause live';
+  button.setAttribute("aria-pressed", String(livePaused));
+  document.querySelector("#live-state-label").classList.toggle("paused", livePaused);
+  document.querySelector("#live-state-text").textContent = livePaused ? "PAUSED" : "LIVE";
+  document.querySelector("#live-audio-toggle").disabled = livePaused;
+}
+
+function stopLiveFeed(message) {
+  cancelLiveRestart();
+  liveFeed.removeAttribute("src");
+  stopLiveAudio();
+  liveMessage.textContent = message;
+  document.querySelector("#live-resolution").textContent = `${liveQuality.toUpperCase()} · paused`;
+  livePlaceholder.hidden = false;
   updateLiveQualityButtons(false);
 }
 
 function restartLiveFeed() {
   cancelLiveRestart();
   liveFeed.removeAttribute("src");
+  if (livePaused) {
+    liveMessage.textContent = "Live video paused.";
+    document.querySelector("#live-resolution").textContent = `${liveQuality.toUpperCase()} · paused`;
+    livePlaceholder.hidden = false;
+    updateLiveQualityButtons(false);
+    return;
+  }
   liveMessage.textContent = `Switching to ${liveQuality.toUpperCase()}…`;
   livePlaceholder.hidden = false;
   updateLiveQualityButtons(true);
@@ -520,15 +559,25 @@ function selectLiveQuality(quality) {
 
 function setLiveFeedActive(active) {
   if (active) {
+    if (livePaused) {
+      liveMessage.textContent = "Live video paused.";
+      livePlaceholder.hidden = false;
+      return;
+    }
     startLiveFeed();
     return;
   }
-  cancelLiveRestart();
-  liveFeed.removeAttribute("src");
-  stopLiveAudio();
-  liveMessage.textContent = "Live video paused.";
-  livePlaceholder.hidden = false;
-  updateLiveQualityButtons(false);
+  stopLiveFeed("Live video paused while this tab is inactive.");
+}
+
+function toggleLiveFeed() {
+  livePaused = !livePaused;
+  if (livePaused) {
+    stopLiveFeed("Live video paused.");
+  } else {
+    startLiveFeed();
+  }
+  updateLivePauseState();
 }
 
 function updateLiveAudioState(active, label) {
@@ -550,6 +599,7 @@ function stopLiveAudio() {
 }
 
 async function toggleLiveAudio() {
+  if (livePaused) return;
   if (liveAudio.hasAttribute("src")) {
     stopLiveAudio();
     return;
@@ -1408,6 +1458,7 @@ historyVideo.addEventListener("ended", () => {
   if (nextPoint) selectHistorySegment(nextPoint.index, nextPoint.seconds);
 });
 document.querySelector("#apply-settings").addEventListener("click", applySettings);
+document.querySelector("#live-pause-toggle").addEventListener("click", toggleLiveFeed);
 document.querySelector("#live-audio-toggle").addEventListener("click", () => void toggleLiveAudio());
 document.querySelector("#show-clear-cache").addEventListener("click", () => cacheClearDialog.showModal());
 document.querySelector("#clear-cache").addEventListener("click", () => void clearMediaCache());
@@ -1477,6 +1528,7 @@ window.addEventListener("pagehide", () => {
 });
 
 liveFeed.addEventListener("load", () => {
+  if (livePaused || !liveFeed.hasAttribute("src")) return;
   const resolution = liveFeed.naturalWidth && liveFeed.naturalHeight
     ? `${liveFeed.naturalWidth} × ${liveFeed.naturalHeight}`
     : "connected";
@@ -1498,5 +1550,6 @@ liveAudio.addEventListener("error", () => {
 });
 
 updateLiveQualityButtons();
+updateLivePauseState();
 activateTab(window.location.hash.slice(1) || "live");
 refresh();

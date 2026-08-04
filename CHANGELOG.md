@@ -5,6 +5,13 @@ All notable changes to GrowCam PC are documented here. The project follows
 
 ## [Unreleased]
 
+### Added
+
+- Add a manual live pause/resume control that disconnects video and audio while
+  preserving the selected SD/FHD quality.
+- Show the GrowCam C4's estimated one-third time-lapse storage allocation while
+  labeling its unreported free space as unavailable.
+
 ## [1.1.0] - 2026-08-04
 
 ### Added

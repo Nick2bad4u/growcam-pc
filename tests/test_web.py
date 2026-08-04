@@ -916,8 +916,14 @@ def test_browser_ships_manual_retry_and_blocks_protected_tab_fetches() -> None:
     assert "if (historyPreviewOpening)" in javascript
     assert 'data-live-quality="sd"' in html
     assert 'data-live-quality="fhd"' in html
+    assert 'id="live-pause-toggle"' in html
+    assert 'id="timelapse-storage-estimate"' in html
     assert "?quality=${encodeURIComponent(liveQuality)}" in javascript
     assert 'window.localStorage.setItem("growcam-live-quality", liveQuality)' in javascript
+    assert "if (livePaused || document.querySelector" in javascript
+    assert 'stopLiveFeed("Live video paused.")' in javascript
+    assert "const estimatedTimelapseMib = totalMib / 2" in javascript
+    assert "Estimated 1/3 card allocation · free space unavailable" in javascript
 
 
 def test_settings_route_persists_revision_and_reconfigures_cache(

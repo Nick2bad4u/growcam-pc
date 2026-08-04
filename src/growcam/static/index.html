@@ -55,7 +55,7 @@
 
       <section id="panel-live" class="tab-panel" role="tabpanel" aria-labelledby="tab-live">
         <section class="viewer live-accent" aria-label="Live camera view">
-          <div class="feed-label"><span class="pulse" aria-hidden="true"></span> LIVE</div>
+          <div id="live-state-label" class="feed-label"><span class="pulse" aria-hidden="true"></span> <span id="live-state-text">LIVE</span></div>
           <div class="live-stage">
             <img id="live-feed" data-src="/stream.mjpg" alt="Live GrowCam video" />
             <p id="live-placeholder" class="live-placeholder">
@@ -71,6 +71,7 @@
                 <button class="compact quality-button selected" type="button" data-live-quality="fhd" aria-pressed="true">FHD</button>
               </div>
               <audio id="live-audio" data-src="/stream.mp3" preload="none"></audio>
+              <button id="live-pause-toggle" class="compact" type="button" aria-pressed="false"><span class="nf" aria-hidden="true"></span> Pause live</button>
               <button id="live-audio-toggle" class="compact" type="button"><span class="nf" aria-hidden="true">󰝟</span> Enable audio</button>
               <a class="icon-link" href="/snapshot.jpg" download="growcam-snapshot.jpg"><span class="nf" aria-hidden="true"></span> Snapshot</a>
             </div>
@@ -92,6 +93,11 @@
             <p><span class="nf" aria-hidden="true"></span> Free space</p>
             <strong id="storage-free">—</strong>
             <small id="storage-percent">—</small>
+          </article>
+          <article class="metric-timelapse">
+            <p><span class="nf" aria-hidden="true">󰔚</span> Estimated time-lapse reserve</p>
+            <strong id="timelapse-storage-estimate">—</strong>
+            <small id="timelapse-storage-note">Loading allocation estimate…</small>
           </article>
         </section>
       </section>
