@@ -86,6 +86,50 @@ def test_require_ok_includes_camera_return_code() -> None:
         DVRIPClient._require_ok("login", {"Ret": 101})
 
 
+def test_require_ok_explains_locked_login() -> None:
+    with pytest.raises(DVRIPError, match=r"Ret=205.*user is locked"):
+        DVRIPClient._require_ok("login", {"Ret": 205})
+
+
+def test_close_logs_out_authenticated_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    camera = DVRIPClient("192.0.2.1")
+    connection = socket.socket()
+    camera._socket = connection
+    camera._session_id = 0x1234
+    requests: list[tuple[int, dict[str, Any], dict[str, object]]] = []
+
+    def fake_request(message_id: int, body: dict[str, Any], **kwargs: object) -> dict[str, int]:
+        requests.append((message_id, body, kwargs))
+        return {"Ret": 100}
+
+    monkeypatch.setattr(camera, "_request", fake_request)
+
+    camera.close()
+
+    assert requests == [(1002, {"Name": ""}, {})]
+    assert connection.fileno() == -1
+    assert vars(camera)["_socket"] is None
+    assert vars(camera)["_session_id"] == 0
+
+
+def test_close_still_clears_session_when_logout_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    camera = DVRIPClient("192.0.2.1")
+    connection = socket.socket()
+    camera._socket = connection
+    camera._session_id = 0x1234
+
+    def fail_request(_message_id: int, _body: dict[str, Any], **_kwargs: object) -> dict[str, int]:
+        raise DVRIPError("camera stopped responding")
+
+    monkeypatch.setattr(camera, "_request", fail_request)
+
+    camera.close()
+
+    assert connection.fileno() == -1
+    assert vars(camera)["_socket"] is None
+    assert vars(camera)["_session_id"] == 0
+
+
 def test_recordings_passes_explicit_timelapse_event(monkeypatch: pytest.MonkeyPatch) -> None:
     camera = DVRIPClient("192.0.2.1")
     requests: list[dict[str, Any]] = []

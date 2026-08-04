@@ -21,6 +21,17 @@ _HEADER = struct.Struct("<BB2xIIBBHI")
 _MAGIC = 0xFF
 _SOFIA_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 _OK = {100, 515}
+_LOGOUT_MESSAGE = 1002
+_LOGOUT_TIMEOUT = 1.0
+_LOGIN_REJECTION_DETAILS = {
+    106: "username or password is incorrect",
+    203: "password is incorrect",
+    204: "user is invalid",
+    205: "user is locked",
+    206: "user is blacklisted",
+    207: "user is already logged in",
+    430: "user does not exist",
+}
 _DOWNLOAD_CLAIM_MESSAGE = 1425
 _DOWNLOAD_DATA_MESSAGE = 1426
 _PLAYBACK_DATA_MESSAGE = 1422
@@ -110,15 +121,30 @@ class DVRIPClient:
         return self.login_info
 
     def close(self) -> None:
-        """Close the socket and discard session credentials."""
+        """Log out when authenticated, close the socket, and discard session credentials."""
         if self._socket is not None:
             try:
-                self._socket.close()
+                if self._session_id:
+                    self._logout()
             finally:
-                self._socket = None
-                self._session_id = 0
-                self._admin_token = ""
-                self.login_info = None
+                try:
+                    self._socket.close()
+                finally:
+                    self._socket = None
+                    self._session_id = 0
+                    self._admin_token = ""
+                    self.login_info = None
+
+    def _logout(self) -> None:
+        """Release a camera-side session without letting cleanup failures mask the caller."""
+        if self._socket is None or not self._session_id:
+            return
+        try:
+            self._socket.settimeout(min(self.timeout, _LOGOUT_TIMEOUT))
+            response = self._request(_LOGOUT_MESSAGE, {"Name": ""})
+            self._require_ok("logout", response, allowed={100, 202, 515})
+        except (DVRIPError, OSError, TypeError, ValueError):
+            pass
 
     def system_info(self, name: str) -> dict[str, Any] | list[Any]:
         """Fetch one named system-information record."""
@@ -665,7 +691,9 @@ class DVRIPClient:
     ) -> None:
         code = int(response.get("Ret", 0))
         if code not in allowed:
-            raise DVRIPError(f"{operation} rejected by camera (Ret={code})")
+            detail = _LOGIN_REJECTION_DETAILS.get(code)
+            suffix = f": {detail}" if operation == "login" and detail is not None else ""
+            raise DVRIPError(f"{operation} rejected by camera (Ret={code}){suffix}")
 
 
 def _receive_exact(connection: socket.socket, length: int) -> bytes:

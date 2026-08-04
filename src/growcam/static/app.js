@@ -232,6 +232,20 @@ async function loadInfo() {
   document.querySelector("#storage-free").textContent = formatSize(freeMib * 1024 ** 2);
   document.querySelector("#storage-percent").textContent = totalMib ? `${((freeMib / totalMib) * 100).toFixed(1)}% available` : "Capacity unavailable";
   document.querySelector("#storage-window").textContent = `${partition.OldStartTime || "—"} → ${partition.NewEndTime || "—"}`;
+  document.querySelector("#camera-control-note").hidden = true;
+}
+
+function renderCameraControlUnavailable(error) {
+  document.querySelector("#device").textContent = "Live stream only";
+  document.querySelector("#firmware").textContent = "Camera control login unavailable";
+  document.querySelector("#storage-total").textContent = "Unavailable";
+  document.querySelector("#storage-free").textContent = "Unavailable";
+  document.querySelector("#storage-percent").textContent = "DVRIP access required";
+  document.querySelector("#storage-window").textContent = "DVRIP access required";
+
+  const note = document.querySelector("#camera-control-note");
+  document.querySelector("#camera-control-error").textContent = `${errorMessage(error)}. Live video uses RTSP and can still work; storage, rewind, time-lapse, and files require the camera control account configured when this server starts.`;
+  note.hidden = false;
 }
 
 function secondsOfDay(value) {
@@ -1043,16 +1057,24 @@ async function buildPreview(recording) {
 
 async function refresh() {
   setStatus(connection, "Connecting", "pending");
-  try {
-    await Promise.all([loadInfo(), loadAppSettings()]);
-    setStatus(connection, "Connected locally");
-    appReady = true;
-    const activeTab = tabButtons.find((button) => button.getAttribute("aria-selected") === "true");
-    await ensureTabData(activeTab?.dataset.tab || "live");
-  } catch (error) {
-    setStatus(connection, "Connection error", "error");
-    document.querySelector("#history-status").textContent = errorMessage(error);
+  const [infoResult, settingsResult] = await Promise.allSettled([loadInfo(), loadAppSettings()]);
+
+  if (infoResult.status === "rejected") {
+    renderCameraControlUnavailable(infoResult.reason);
+    setStatus(connection, "Live feed only", "warning");
+  } else {
+    setStatus(connection, "Camera connected");
   }
+
+  if (settingsResult.status === "rejected") {
+    setStatus(document.querySelector("#app-settings-state"), "Settings unavailable", "error");
+    document.querySelector("#app-settings-status").textContent = errorMessage(settingsResult.reason);
+  }
+
+  appReady = true;
+  const activeTab = tabButtons.find((button) => button.getAttribute("aria-selected") === "true");
+  const activeTabName = activeTab?.dataset.tab || "live";
+  if (activeTabName !== "settings") await ensureTabData(activeTabName);
 }
 
 timelapseForm.addEventListener("input", () => {
@@ -1191,7 +1213,7 @@ for (const button of tabButtons) {
 
 window.addEventListener("hashchange", () => activateTab(window.location.hash.slice(1) || "live"));
 
-window.addEventListener("beforeunload", () => {
+window.addEventListener("pagehide", () => {
   if (previewRequest) previewRequest.abort();
   if (historyRequest) historyRequest.abort();
 });
