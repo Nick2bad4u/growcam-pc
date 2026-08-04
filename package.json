@@ -1,7 +1,7 @@
 {
   "$schema": "https://www.schemastore.org/package.json",
   "name": "growcam-pc",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "description": "Local dashboard, daily rewind, and time-lapse tools for the VIVOSUN GrowCam C4",
   "keywords": [
@@ -49,7 +49,7 @@
     "lint": "npm run lint:python && npm run lint:js && npm run lint:remark && npm run lint:secretlint",
     "lint:gitleaks": "gitleaks dir --config .gitleaks.toml .",
     "lint:js": "node --check src/growcam/static/app.js",
-    "lint:lychee": "lychee --config node_modules/lychee-config-nick2bad4u/lychee.toml --exclude \"^.*pypi[.]org/project/growcam-pc/?$\" --exclude \"^https://nick2bad4u[.]github[.]io/?$\" --exclude \"^https://nick2bad4u[.]github[.]io/growcam-pc/docs/growcam-c4-setup/?$\" --exclude \"^.*github[.]com/Nick2bad4u/growcam-pc/compare/v1[.]0[.]0[.][.][.]v1[.]1[.]0$\" --exclude \"^.*github[.]com/Nick2bad4u/growcam-pc/compare/v1[.]1[.]0[.][.][.]HEAD$\" README.md CHANGELOG.md CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md website",
+    "lint:lychee": "lychee --config node_modules/lychee-config-nick2bad4u/lychee.toml --exclude \"^.*pypi[.]org/project/growcam-pc/?$\" --exclude \"^https://nick2bad4u[.]github[.]io/?$\" --exclude \"^https://nick2bad4u[.]github[.]io/growcam-pc/docs/growcam-c4-setup/?$\" --exclude \"^.*github[.]com/Nick2bad4u/growcam-pc/compare/v1[.]1[.]0[.][.][.]v1[.]2[.]0$\" --exclude \"^.*github[.]com/Nick2bad4u/growcam-pc/compare/v1[.]2[.]0[.][.][.]HEAD$\" README.md CHANGELOG.md CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md website",
     "lint:lychee:smoke": "lychee --config node_modules/lychee-config-nick2bad4u/lychee.toml --dump-inputs README.md website",
     "lint:python": "uv run ruff check . && uv run ruff format --check .",
     "lint:remark": "remark . --frail --ignore-path .remarkignore",

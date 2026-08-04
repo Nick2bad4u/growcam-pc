@@ -5,6 +5,8 @@ All notable changes to GrowCam PC are documented here. The project follows
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-08-04
+
 ### Added
 
 - Add a manual live pause/resume control that disconnects video and audio while
@@ -157,4 +159,5 @@ All notable changes to GrowCam PC are documented here. The project follows
 [0.3.0]: https://github.com/Nick2bad4u/growcam-pc/compare/v0.2.0...v0.3.0
 [1.0.0]: https://github.com/Nick2bad4u/growcam-pc/compare/v0.3.0...v1.0.0
 [1.1.0]: https://github.com/Nick2bad4u/growcam-pc/compare/v1.0.0...v1.1.0
-[Unreleased]: https://github.com/Nick2bad4u/growcam-pc/compare/v1.1.0...HEAD
+[1.2.0]: https://github.com/Nick2bad4u/growcam-pc/compare/v1.1.0...v1.2.0
+[Unreleased]: https://github.com/Nick2bad4u/growcam-pc/compare/v1.2.0...HEAD
