@@ -29,7 +29,7 @@ const features = [
     icon: "◉",
     tone: "cyan",
     title: "Watch locally",
-    text: "View the live RTSP feed and save full-resolution snapshots without a vendor cloud relay.",
+    text: "Switch between the camera's SD and FHD live streams and save full-resolution snapshots without a vendor cloud relay.",
   },
   {
     icon: "↶",

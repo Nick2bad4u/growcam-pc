@@ -7,7 +7,7 @@ import errno
 import http.client
 import json
 import threading
-from datetime import datetime
+from datetime import UTC, datetime
 from http import HTTPStatus
 from io import BytesIO
 from pathlib import Path
@@ -18,9 +18,11 @@ import pytest
 from typing_extensions import override
 
 from growcam import web
+from growcam.dvrip import DVRIPError, LoginInfo
 from growcam.settings import settings_path
 from growcam.web import (
     GrowCamHTTPServer,
+    LiveQuality,
     WebConfig,
     WebRequestError,
     _browser_files,
@@ -29,6 +31,7 @@ from growcam.web import (
     _file_length_bytes,
     _history_date,
     _history_preview_range,
+    _live_quality,
     _matching_recording,
     _playable_history_recordings,
     _preview_cache_directory,
@@ -45,6 +48,28 @@ if TYPE_CHECKING:
     from typing import BinaryIO, Self
 
 
+def _json_request(
+    server: GrowCamHTTPServer,
+    path: str,
+    *,
+    method: str = "GET",
+) -> tuple[int, dict[str, object]]:
+    port = cast("tuple[str, int]", server.server_address)[1]
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    body: str | None = None
+    headers: dict[str, str] = {}
+    if method == "POST":
+        body = "{}"
+        headers = {"Content-Type": "application/json", "X-GrowCam-Request": "1"}
+    try:
+        connection.request(method, path, body=body, headers=headers)
+        response = connection.getresponse()
+        payload = cast("dict[str, object]", json.loads(response.read()))
+        return response.status, payload
+    finally:
+        connection.close()
+
+
 def test_download_name_uses_recording_timestamp_only() -> None:
     camera_file = "/idea0/2026-07-31/001/23.40.00-23.50.00[R][@17f2][0].h264"
 
@@ -53,6 +78,14 @@ def test_download_name_uses_recording_timestamp_only() -> None:
 
 def test_download_name_does_not_reflect_unstructured_input() -> None:
     assert _download_name("/\r\nX-Unsafe: value") == "growcam-recording.mkv"
+
+
+def test_live_quality_accepts_documented_profiles_and_rejects_unknown_values() -> None:
+    assert _live_quality("SD") is LiveQuality.SD
+    assert _live_quality("fhd") is LiveQuality.FHD
+    with pytest.raises(WebRequestError, match="must be 'sd' or 'fhd'") as raised:
+        _ = _live_quality("4k")
+    assert raised.value.status == HTTPStatus.BAD_REQUEST
 
 
 def test_timelapse_download_name_identifies_the_recording_type() -> None:
@@ -258,6 +291,44 @@ def test_recent_recording_metadata_avoids_a_second_camera_lookup(
         server.server_close()
 
 
+def test_cached_active_timelapse_download_is_rejected_without_a_camera_lookup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    camera_file = "/idea0/2026-08-02/001/08.00.00-15.00.00[E][0]._h264"
+    record: dict[str, object] = {
+        "fileName": camera_file,
+        "beginTime": "2026-08-02 08:00:00",
+        "endTime": "2026-08-02 15:00:00",
+        "sizeBytes": 768 * 1024,
+        "active": True,
+    }
+
+    def fail_timelapse_lookup(_handler: web.GrowCamHandler) -> dict[str, object]:
+        pytest.fail("cached time-lapse metadata should prevent a second camera lookup")
+
+    monkeypatch.setattr(web, "_preview_cache_directory", lambda: tmp_path)
+    monkeypatch.setattr(web.GrowCamHandler, "_timelapse_state", fail_timelapse_lookup)
+    server = GrowCamHTTPServer(("127.0.0.1", 0), WebConfig("192.0.2.1"))
+    server.remember_recordings([record])
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, payload = _json_request(server, f"/api/download?{urlencode({'file': camera_file})}")
+
+        assert status == HTTPStatus.CONFLICT
+        assert payload["error"] == (
+            "An active camera file can be previewed; its final download is available after completion"
+        )
+        assert server.camera_controls.snapshot().status is web.CameraControlStatus.UNVERIFIED
+        assert server.camera_operation_lock.acquire(blocking=False)
+        server.camera_operation_lock.release()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 def test_address_in_use_is_reported_consistently(monkeypatch: pytest.MonkeyPatch) -> None:
     def fail_to_bind(
         _address: tuple[str, int],
@@ -298,6 +369,555 @@ def test_static_responses_have_browser_security_headers(
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_camera_control_coordinator_reuses_one_session_and_rejects_overlap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection_count = 0
+    active_connections = 0
+    maximum_active_connections = 0
+    counts_lock = threading.Lock()
+    first_inside = threading.Event()
+    second_requested = threading.Event()
+    second_rejected = threading.Event()
+    release_first = threading.Event()
+
+    class SerializedCamera:
+        def __init__(self, _host: str, _port: int, _username: str, _password: str) -> None:
+            self.login_info: LoginInfo | None = None
+            self.connected = False
+
+        def connect(self) -> LoginInfo:
+            nonlocal active_connections, connection_count, maximum_active_connections
+            with counts_lock:
+                connection_count += 1
+                active_connections += 1
+                maximum_active_connections = max(maximum_active_connections, active_connections)
+            self.connected = True
+            self.login_info = LoginInfo(1, 1, "GrowCam", 20)
+            return self.login_info
+
+        def close(self) -> None:
+            nonlocal active_connections
+            if not self.connected:
+                return
+            with counts_lock:
+                active_connections -= 1
+            self.connected = False
+            self.login_info = None
+
+        def keepalive(self) -> None:
+            return
+
+    monkeypatch.setattr(web, "DVRIPClient", SerializedCamera)
+    coordinator = web.CameraControlCoordinator(WebConfig("192.0.2.1"))
+
+    def first_operation() -> None:
+        with coordinator.camera():
+            first_inside.set()
+            if not release_first.wait(timeout=5):
+                raise TimeoutError("test did not release the first camera operation")
+
+    def second_operation() -> None:
+        second_requested.set()
+        with pytest.raises(web.CameraControlBusyError), coordinator.camera():
+            pytest.fail("overlapping camera operation should not be queued")
+        second_rejected.set()
+
+    first_thread = threading.Thread(target=first_operation)
+    second_thread = threading.Thread(target=second_operation)
+    first_thread.start()
+    assert first_inside.wait(timeout=5)
+    second_thread.start()
+    assert second_requested.wait(timeout=5)
+
+    assert connection_count == 1
+    assert active_connections == 1
+    assert second_rejected.wait(timeout=5)
+
+    release_first.set()
+    first_thread.join(timeout=5)
+    second_thread.join(timeout=5)
+
+    assert not first_thread.is_alive()
+    assert not second_thread.is_alive()
+    with coordinator.camera() as reused_camera:
+        assert reused_camera.login_info is not None
+    assert connection_count == 1
+    assert maximum_active_connections == 1
+    assert active_connections == 1
+    coordinator.close()
+    assert active_connections == 0
+    with pytest.raises(web.CameraControlError), coordinator.camera(explicit_retry=True):
+        pytest.fail("a closed coordinator must never open another camera session")
+    assert connection_count == 1
+    assert coordinator.snapshot().retry_allowed is False
+
+
+def test_camera_control_coordinator_keeps_the_single_session_authenticated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connect_count = 0
+    close_count = 0
+    keepalive_count = 0
+    keepalive_sent = threading.Event()
+
+    class PersistentCamera:
+        def __init__(self, _host: str, _port: int, _username: str, _password: str) -> None:
+            self.login_info: LoginInfo | None = None
+
+        def connect(self) -> LoginInfo:
+            nonlocal connect_count
+            connect_count += 1
+            self.login_info = LoginInfo(1, 1, "GrowCam", 20)
+            return self.login_info
+
+        def close(self) -> None:
+            nonlocal close_count
+            close_count += 1
+            self.login_info = None
+
+        def keepalive(self) -> None:
+            nonlocal keepalive_count
+            keepalive_count += 1
+            keepalive_sent.set()
+
+    monkeypatch.setattr(web, "DVRIPClient", PersistentCamera)
+    coordinator = web.CameraControlCoordinator(WebConfig("192.0.2.1"))
+    monkeypatch.setattr(coordinator, "_keepalive_interval", lambda: 0.01)
+    try:
+        with coordinator.camera() as first_camera:
+            first_identity = id(first_camera)
+        with coordinator.camera() as second_camera:
+            assert id(second_camera) == first_identity
+        assert keepalive_sent.wait(timeout=5)
+        assert connect_count == 1
+        assert keepalive_count >= 1
+    finally:
+        coordinator.close()
+
+    assert close_count == 1
+
+
+def test_keepalive_failure_blocks_without_automatically_reconnecting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connect_count = 0
+    close_count = 0
+    blocked = threading.Event()
+
+    class FailingKeepaliveCamera:
+        def __init__(self, _host: str, _port: int, _username: str, _password: str) -> None:
+            self.login_info: LoginInfo | None = None
+
+        def connect(self) -> LoginInfo:
+            nonlocal connect_count
+            connect_count += 1
+            self.login_info = LoginInfo(1, 1, "GrowCam", 20)
+            return self.login_info
+
+        def close(self) -> None:
+            nonlocal close_count
+            if self.login_info is None:
+                return
+            close_count += 1
+            self.login_info = None
+
+        def keepalive(self) -> None:
+            raise DVRIPError(
+                "keepalive rejected by camera (Ret=205): user is locked",
+                operation="keepalive",
+                return_code=205,
+            )
+
+    monkeypatch.setattr(web, "DVRIPClient", FailingKeepaliveCamera)
+    coordinator = web.CameraControlCoordinator(WebConfig("192.0.2.1"))
+    monkeypatch.setattr(coordinator, "_keepalive_interval", lambda: 0.01)
+    set_state = coordinator._set_state
+
+    def observe_state(state: web.CameraControlState) -> None:
+        set_state(state)
+        if state.status is web.CameraControlStatus.BLOCKED:
+            blocked.set()
+
+    monkeypatch.setattr(coordinator, "_set_state", observe_state)
+    try:
+        with coordinator.camera():
+            pass
+        assert blocked.wait(timeout=5)
+
+        with pytest.raises(web.CameraControlError), coordinator.camera():
+            pytest.fail("a failed session must not reconnect automatically")
+        with pytest.raises(web.CameraControlError), coordinator.camera(explicit_retry=True):
+            pytest.fail("Ret=205 must disable even an explicit retry")
+
+        state = coordinator.snapshot()
+        assert state.status is web.CameraControlStatus.BLOCKED
+        assert state.return_code == 205
+        assert state.retry_allowed is False
+        assert connect_count == 1
+        assert close_count == 1
+    finally:
+        coordinator.close()
+
+
+def test_rejected_login_is_deduplicated_across_reloads_and_control_tabs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    connect_attempts = 0
+    attempts_lock = threading.Lock()
+    connect_started = threading.Event()
+    release_rejection = threading.Event()
+
+    class RejectingCamera:
+        def __init__(self, _host: str, _port: int, _username: str, _password: str) -> None:
+            self.login_info: LoginInfo | None = None
+
+        def connect(self) -> LoginInfo:
+            nonlocal connect_attempts
+            with attempts_lock:
+                connect_attempts += 1
+            connect_started.set()
+            if not release_rejection.wait(timeout=5):
+                raise TimeoutError("test did not release the rejected login")
+            raise DVRIPError(
+                "login rejected by camera (Ret=106): username or password is wrong",
+                operation="login",
+                return_code=106,
+            )
+
+        def close(self) -> None:
+            return
+
+    monkeypatch.setattr(web, "_preview_cache_directory", lambda: tmp_path)
+    monkeypatch.setattr(web, "DVRIPClient", RejectingCamera)
+    server = GrowCamHTTPServer(("127.0.0.1", 0), WebConfig("192.0.2.1"))
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    responses: dict[int, tuple[int, dict[str, object]]] = {}
+
+    def request_info(index: int) -> None:
+        responses[index] = _json_request(server, "/api/info")
+
+    first_request = threading.Thread(target=request_info, args=(0,))
+    second_request = threading.Thread(target=request_info, args=(1,))
+    first_request.start()
+    assert connect_started.wait(timeout=5)
+    second_request.start()
+    try:
+        second_request.join(timeout=5)
+        assert not second_request.is_alive()
+        assert responses[1][0] == HTTPStatus.CONFLICT
+        release_rejection.set()
+        first_request.join(timeout=5)
+        assert not first_request.is_alive()
+        assert responses[0][0] == HTTPStatus.LOCKED
+
+        selected_date = datetime.now(tz=UTC).astimezone().date().isoformat()
+        protected_requests = [
+            "/api/info",
+            "/api/info",
+            f"/api/history?date={selected_date}",
+            "/api/timelapse",
+            f"/api/files?date={selected_date}",
+        ]
+        for path in protected_requests:
+            status, payload = _json_request(server, path)
+            control = cast("dict[str, object]", payload["cameraControl"])
+            assert status == HTTPStatus.LOCKED
+            assert control["circuitOpen"] is True
+            assert control["retryAllowed"] is False
+
+        retry_status, retry_payload = _json_request(
+            server,
+            "/api/camera-control/retry",
+            method="POST",
+        )
+        retry_control = cast("dict[str, object]", retry_payload["cameraControl"])
+        assert retry_status == HTTPStatus.LOCKED
+        assert retry_control["retryAllowed"] is False
+
+        status, control = _json_request(server, "/api/camera-control")
+        assert status == HTTPStatus.OK
+        assert control["status"] == "blocked"
+        assert control["returnCode"] == 106
+        assert connect_attempts == 1
+    finally:
+        release_rejection.set()
+        server.shutdown()
+        server.server_close()
+        server_thread.join(timeout=5)
+
+
+def test_locked_login_cannot_be_retried_during_the_server_run(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    connect_attempts = 0
+
+    class LockedCamera:
+        def __init__(self, _host: str, _port: int, _username: str, _password: str) -> None:
+            self.login_info: LoginInfo | None = None
+
+        def connect(self) -> LoginInfo:
+            nonlocal connect_attempts
+            connect_attempts += 1
+            raise DVRIPError(
+                "login rejected by camera (Ret=205): user is locked",
+                operation="login",
+                return_code=205,
+            )
+
+        def close(self) -> None:
+            return
+
+    monkeypatch.setattr(web, "_preview_cache_directory", lambda: tmp_path)
+    monkeypatch.setattr(web, "DVRIPClient", LockedCamera)
+    server = GrowCamHTTPServer(("127.0.0.1", 0), WebConfig("192.0.2.1"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        initial_status, initial_payload = _json_request(server, "/api/info")
+        retry_status, retry_payload = _json_request(
+            server,
+            "/api/camera-control/retry",
+            method="POST",
+        )
+        second_retry_status, _ = _json_request(
+            server,
+            "/api/camera-control/retry",
+            method="POST",
+        )
+
+        initial_control = cast("dict[str, object]", initial_payload["cameraControl"])
+        retry_control = cast("dict[str, object]", retry_payload["cameraControl"])
+        assert initial_status == HTTPStatus.LOCKED
+        assert retry_status == HTTPStatus.LOCKED
+        assert second_retry_status == HTTPStatus.LOCKED
+        assert initial_control["locked"] is True
+        assert retry_control["retryAllowed"] is False
+        assert retry_control["returnCode"] == 205
+        assert connect_attempts == 1
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_explicit_retry_is_the_only_way_to_close_a_retryable_control_circuit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    connect_attempts = 0
+
+    class RetryCamera:
+        def __init__(self, _host: str, _port: int, _username: str, _password: str) -> None:
+            self.login_info: LoginInfo | None = None
+
+        def connect(self) -> LoginInfo:
+            nonlocal connect_attempts
+            connect_attempts += 1
+            if connect_attempts == 1:
+                raise OSError("camera connection closed before login completed")
+            self.login_info = LoginInfo(1, 1, "GrowCam", 20)
+            return self.login_info
+
+        def system_info(self, _name: str) -> dict[str, object]:
+            return {}
+
+        def close(self) -> None:
+            self.login_info = None
+
+    monkeypatch.setattr(web, "_preview_cache_directory", lambda: tmp_path)
+    monkeypatch.setattr(web, "DVRIPClient", RetryCamera)
+    server = GrowCamHTTPServer(("127.0.0.1", 0), WebConfig("192.0.2.1"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        first_status, first_payload = _json_request(server, "/api/info")
+        blocked_status, _ = _json_request(server, "/api/info")
+        retry_status, retry_payload = _json_request(
+            server,
+            "/api/camera-control/retry",
+            method="POST",
+        )
+        restored_status, restored_payload = _json_request(server, "/api/info")
+
+        retry_control = cast("dict[str, object]", retry_payload["cameraControl"])
+        first_control = cast("dict[str, object]", first_payload["cameraControl"])
+        restored_control = cast("dict[str, object]", restored_payload["cameraControl"])
+        assert first_status == HTTPStatus.LOCKED
+        assert blocked_status == HTTPStatus.LOCKED
+        assert retry_status == HTTPStatus.OK
+        assert restored_status == HTTPStatus.OK
+        assert first_control["retryAllowed"] is True
+        assert retry_control["available"] is True
+        assert restored_control["status"] == "available"
+        assert connect_attempts == 2
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_failed_explicit_retry_cannot_be_repeated(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    connect_attempts = 0
+
+    class UnreachableCamera:
+        def __init__(self, _host: str, _port: int, _username: str, _password: str) -> None:
+            self.login_info: LoginInfo | None = None
+
+        def connect(self) -> LoginInfo:
+            nonlocal connect_attempts
+            connect_attempts += 1
+            raise OSError("camera connection closed before login completed")
+
+        def close(self) -> None:
+            return
+
+    monkeypatch.setattr(web, "_preview_cache_directory", lambda: tmp_path)
+    monkeypatch.setattr(web, "DVRIPClient", UnreachableCamera)
+    server = GrowCamHTTPServer(("127.0.0.1", 0), WebConfig("192.0.2.1"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        initial_status, initial_payload = _json_request(server, "/api/info")
+        retry_status, retry_payload = _json_request(
+            server,
+            "/api/camera-control/retry",
+            method="POST",
+        )
+        repeated_status, repeated_payload = _json_request(
+            server,
+            "/api/camera-control/retry",
+            method="POST",
+        )
+
+        initial_control = cast("dict[str, object]", initial_payload["cameraControl"])
+        retry_control = cast("dict[str, object]", retry_payload["cameraControl"])
+        repeated_control = cast("dict[str, object]", repeated_payload["cameraControl"])
+        assert initial_status == HTTPStatus.LOCKED
+        assert retry_status == HTTPStatus.LOCKED
+        assert repeated_status == HTTPStatus.LOCKED
+        assert initial_control["retryAllowed"] is True
+        assert retry_control["retryAllowed"] is False
+        assert repeated_control["retryAllowed"] is False
+        assert connect_attempts == 2
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+@pytest.mark.parametrize(
+    ("quality", "expected_stream_index", "expected_width"),
+    [("sd", 1, 800), ("fhd", 0, 1920)],
+)
+def test_rtsp_live_quality_remains_independent_after_the_dvrip_circuit_opens(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    quality: str,
+    expected_stream_index: int,
+    expected_width: int,
+) -> None:
+    connect_attempts = 0
+
+    class LockedCamera:
+        def __init__(self, _host: str, _port: int, _username: str, _password: str) -> None:
+            self.login_info: LoginInfo | None = None
+
+        def connect(self) -> LoginInfo:
+            nonlocal connect_attempts
+            connect_attempts += 1
+            raise DVRIPError(
+                "login rejected by camera (Ret=205): user is locked",
+                operation="login",
+                return_code=205,
+            )
+
+        def close(self) -> None:
+            return
+
+    class MjpegProcess:
+        def __init__(self) -> None:
+            self.stdout = BytesIO(b"--growcam\r\nContent-Type: image/jpeg\r\n\r\nframe")
+            self.terminated = False
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+        def wait(self, timeout: float | None = None) -> int:
+            assert timeout == 5
+            return 0
+
+        def kill(self) -> None:
+            raise AssertionError("the completed MJPEG process should not be killed")
+
+    process = MjpegProcess()
+
+    def start_stream(
+        host: str,
+        _username: str,
+        _password: str,
+        *,
+        frames_per_second: int = 5,
+        width: int = 1280,
+        stream_index: int | None = None,
+    ) -> subprocess.Popen[bytes]:
+        assert host == "192.0.2.1"
+        assert frames_per_second == 5
+        assert width == expected_width
+        assert stream_index == expected_stream_index
+        return cast("subprocess.Popen[bytes]", process)
+
+    monkeypatch.setattr(web, "_preview_cache_directory", lambda: tmp_path)
+    monkeypatch.setattr(web, "DVRIPClient", LockedCamera)
+    monkeypatch.setattr(web, "start_mjpeg", start_stream)
+    server = GrowCamHTTPServer(("127.0.0.1", 0), WebConfig("192.0.2.1"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+    try:
+        status, _ = _json_request(server, "/api/info")
+        connection.request("GET", f"/stream.mjpg?quality={quality}")
+        response = connection.getresponse()
+
+        assert status == HTTPStatus.LOCKED
+        assert response.status == HTTPStatus.OK
+        assert response.getheader("Content-Type") == "multipart/x-mixed-replace; boundary=growcam"
+        assert response.getheader("X-GrowCam-Live-Quality") == quality
+        assert response.read().endswith(b"frame")
+        assert process.terminated is True
+        assert connect_attempts == 1
+    finally:
+        connection.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_browser_ships_manual_retry_and_blocks_protected_tab_fetches() -> None:
+    static_directory = Path(web.__file__).parent / "static"
+    html = (static_directory / "index.html").read_text(encoding="utf-8")
+    javascript = (static_directory / "app.js").read_text(encoding="utf-8")
+
+    assert 'id="camera-control-retry"' in html
+    assert 'new Set(["rewind", "timelapse", "files"])' in javascript
+    assert "cameraControlTabs.has(name) && !cameraControlAvailable" in javascript
+    assert 'getJson("/api/camera-control/retry"' in javascript
+    assert "if (historyLoadPromise) return historyLoadPromise" in javascript
+    assert "if (timelapseLoadPromise) return timelapseLoadPromise" in javascript
+    assert "if (filesLoadPromise) return filesLoadPromise" in javascript
+    assert "if (historyPreviewOpening)" in javascript
+    assert 'data-live-quality="sd"' in html
+    assert 'data-live-quality="fhd"' in html
+    assert "?quality=${encodeURIComponent(liveQuality)}" in javascript
+    assert 'window.localStorage.setItem("growcam-live-quality", liveQuality)' in javascript
 
 
 def test_settings_route_persists_revision_and_reconfigures_cache(

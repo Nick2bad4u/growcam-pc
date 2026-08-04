@@ -11,7 +11,7 @@ import pytest
 from typing_extensions import override
 
 import growcam.media_cache as media_cache_module
-from growcam.media_cache import MediaCache
+from growcam.media_cache import MediaCache, MediaCacheBusyError
 
 
 def _write_preview(destination: Path, content: bytes) -> None:
@@ -48,6 +48,35 @@ def test_identical_concurrent_preview_builds_are_coalesced(tmp_path: Path) -> No
     assert first_hit is False
     assert second_hit is True
     assert cache.lookup("same", ".mp4") == (first_path, False)
+
+
+def test_distinct_preview_build_is_rejected_instead_of_queued(tmp_path: Path) -> None:
+    cache = MediaCache(tmp_path, threading.Lock())
+    build_started = threading.Event()
+    release_build = threading.Event()
+    second_builder_called = False
+
+    def first_builder(destination: Path) -> None:
+        _ = destination.write_bytes(b"first preview")
+        build_started.set()
+        assert release_build.wait(timeout=5)
+
+    def second_builder(_destination: Path) -> None:
+        nonlocal second_builder_called
+        second_builder_called = True
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        first = executor.submit(cache.get_or_build, "first", ".mp4", first_builder)
+        assert build_started.wait(timeout=5)
+        with pytest.raises(MediaCacheBusyError, match="media operation is active"):
+            _ = cache.get_or_build("second", ".mp4", second_builder)
+        assert second_builder_called is False
+        release_build.set()
+        first_path, first_hit = first.result(timeout=5)
+
+    assert first_hit is False
+    assert first_path.read_bytes() == b"first preview"
+    assert cache.lookup("second", ".mp4") == (None, False)
 
 
 def test_waiting_caller_rebuilds_after_inflight_leader_fails(

@@ -68,13 +68,20 @@ a:hover { text-decoration: underline; }
 .pulse { width: 7px; height: 7px; border-radius: 50%; background: #ff606a; box-shadow: 0 0 13px #ff606a; }
 .viewer-bar, .player-footer { display: flex; justify-content: space-between; align-items: center; gap: 22px; padding: 13px 18px; color: var(--muted); font-size: 0.81rem; }
 .viewer-actions { display: flex; align-items: center; gap: 13px; }
+.quality-selector { display: inline-flex; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: rgb(4 14 18 / 75%); }
+.quality-selector .quality-button { min-width: 44px; border: 0; border-radius: 0; color: var(--muted); }
+.quality-selector .quality-button + .quality-button { border-left: 1px solid var(--line); }
+.quality-selector .quality-button.selected { background: rgb(101 231 255 / 16%); color: var(--cyan); box-shadow: 0 0 0 1px rgb(101 231 255 / 24%) inset; }
 #live-audio-state { color: #728a91; }
 #live-audio-state.active { color: var(--green); }
 .icon-link { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
-.camera-control-note { display: flex; align-items: flex-start; gap: 13px; margin-top: 16px; border: 1px solid rgb(255 198 109 / 42%); border-radius: 14px; padding: 14px 16px; background: rgb(255 198 109 / 7%); color: #ffe4b8; }
+.camera-control-note { display: flex; align-items: center; gap: 13px; margin-top: 16px; border: 1px solid rgb(255 198 109 / 42%); border-radius: 14px; padding: 14px 16px; background: rgb(255 198 109 / 7%); color: #ffe4b8; }
 .camera-control-note > .nf { margin-top: 2px; color: var(--amber); font-size: 1.05rem; }
+.camera-control-copy { flex: 1 1 420px; min-width: 0; }
 .camera-control-note strong { display: block; margin-bottom: 3px; font-size: 0.84rem; }
 .camera-control-note p { color: #cab89b; font-size: 0.78rem; line-height: 1.5; }
+.camera-control-note button { flex: 0 0 auto; margin-left: auto; }
+.app-tab.control-unavailable .nf { color: var(--amber); }
 .metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 16px 0 58px; }
 .metrics article, .card { border: 1px solid var(--line); border-radius: 18px; background: linear-gradient(145deg, rgb(18 34 40 / 96%), rgb(9 21 25 / 96%)); box-shadow: 0 14px 44px rgb(0 0 0 / 13%); }
 .metrics article { position: relative; overflow: hidden; padding: 20px; }
@@ -274,6 +281,8 @@ dialog::backdrop { background: rgb(0 0 0 / 75%); backdrop-filter: blur(5px); }
   .metrics { grid-template-columns: 1fr; margin-bottom: 46px; }
   .app-tabs { top: 5px; width: 100%; margin-top: 24px; }
   .app-tab { padding: 10px 8px; font-size: 0.77rem; }
+  .camera-control-note { align-items: flex-start; flex-wrap: wrap; }
+  .camera-control-note button { width: 100%; margin-left: 0; }
   .viewer { border-radius: 14px; }
   .viewer-bar, .player-footer, .form-actions { align-items: flex-start; flex-direction: column; gap: 9px; }
   .preview-actions { width: 100%; justify-content: space-between; }

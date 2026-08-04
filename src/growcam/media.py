@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, cast
 from urllib.parse import quote
 
+from .dvrip import sofia_hash
 from .xm_media import XMRecordingDemuxer
 
 if TYPE_CHECKING:
@@ -129,9 +130,19 @@ class _QueuedMediaSink:
             listener.close()
 
 
-def rtsp_url(host: str, username: str = "admin", password: str = "") -> str:
-    """Build the authenticated RTSP URL accepted by the GrowCam firmware."""
+def rtsp_url(
+    host: str,
+    username: str = "admin",
+    password: str = "",
+    *,
+    stream_index: int | None = None,
+) -> str:
+    """Build an authenticated root or explicit XMEye RTSP stream URL."""
     user = quote(username, safe="")
+    if stream_index is not None:
+        if stream_index not in {0, 1}:
+            raise ValueError("RTSP stream_index must be 0 (main) or 1 (substream)")
+        return f"rtsp://{host}:554/user={user}&password={sofia_hash(password)}&channel=1&stream={stream_index}.sdp"
     secret = quote(password, safe="")
     return f"rtsp://{user}:{secret}@{host}:554/"
 
@@ -172,13 +183,14 @@ def snapshot(host: str, username: str = "admin", password: str = "") -> bytes:
     return result.stdout
 
 
-def start_mjpeg(
+def start_mjpeg(  # noqa: PLR0913 - explicit camera and conversion options keep live profiles auditable.
     host: str,
     username: str = "admin",
     password: str = "",
     *,
     frames_per_second: int = 5,
     width: int = 1280,
+    stream_index: int | None = None,
 ) -> subprocess.Popen[bytes]:
     """Start an FFmpeg process that emits a browser-compatible MJPEG stream."""
     command = [
@@ -191,7 +203,7 @@ def start_mjpeg(
         "-timeout",
         "5000000",
         "-i",
-        rtsp_url(host, username, password),
+        rtsp_url(host, username, password, stream_index=stream_index),
         "-an",
         "-vf",
         f"fps={frames_per_second},scale={width}:-2",

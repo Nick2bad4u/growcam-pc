@@ -8,7 +8,7 @@ description: Use the GrowCam C4 Live, Rewind, Time-lapse, Files, and Settings vi
 
 ## Live
 
-The Live view converts the camera's RTSP stream to browser-compatible MJPEG. The stream runs only while the tab is visible. Use **Snapshot** to save a full-resolution JPEG. Audio is opt-in: **Enable audio** starts a separate local RTSP-to-MP3 stream after the browser receives a user gesture.
+The Live view converts the camera's RTSP stream to browser-compatible MJPEG. Choose **SD** for the tested camera's 800×448 substream or **FHD** for its 2560×1440 main stream, converted to 1920×1080 for the browser. GrowCam PC remembers the choice locally and restarts only the live-video connection when it changes. The stream runs only while the tab is visible. Use **Snapshot** to save a full-resolution JPEG. Audio is opt-in: **Enable audio** starts a separate local RTSP-to-MP3 stream after the browser receives a user gesture.
 
 ## Rewind
 

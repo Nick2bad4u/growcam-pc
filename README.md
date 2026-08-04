@@ -17,7 +17,7 @@ and is not affiliated with or endorsed by VIVOSUN.
 
 ## Highlights
 
-- Responsive live browser feed, opt-in audio, and full-resolution snapshots.
+- Responsive SD/FHD live browser feed, opt-in audio, and full-resolution snapshots.
 - A 24-hour daily viewer assembled from the camera's recording blocks.
 - One-, two-, five-, and ten-minute or full-block rewind previews with recovered
   audio and automatic continuation through adjacent footage.
@@ -99,6 +99,14 @@ with the camera powered, hold its physical reset button until the factory-reset
 voice prompt plays, wait for pairing mode, and add the camera to the VIVOSUN app
 again.
 
+The dashboard keeps one authenticated DVRIP session open and reuses it for
+status, Rewind, Time-lapse, Files, previews, and downloads. Overlapping camera
+operations are rejected locally instead of queued, and a second GrowCam process
+is stopped before it opens another control socket. Camera-side login rejections
+disable retry for that server run; a transient connection failure permits only
+one explicit retry. The CLI likewise makes one login attempt per invocation and
+never retries automatically, so do not wrap it in an unattended retry loop.
+
 Continue with the [GrowCam C4 setup guide][growcam-c4-setup] for the complete
 first-connection checklist and storage layout.
 
@@ -122,8 +130,11 @@ features and bundled static assets; it does not require Node.js.
 The Live tab converts the camera's RTSP stream into a browser-compatible MJPEG
 feed. GrowCam PC starts this process only while the Live tab is visible and
 stops it when you switch views, which avoids needless camera, CPU, and network
-load. The snapshot action fetches one full-resolution JPEG frame. Audio remains
-off until you click **Enable audio**; that user gesture starts a separate local
+load. Choose **SD** for the camera's 800×448 substream or **FHD** for its
+2560×1440 main stream, converted to a 1920×1080 browser feed to balance detail
+and local MJPEG processing cost. The choice is remembered in the browser. The
+snapshot action still fetches one full-resolution JPEG frame. Audio remains off
+until you click **Enable audio**; that user gesture starts a separate local
 RTSP-to-MP3 stream and switching tabs stops it.
 
 ### Daily rewind

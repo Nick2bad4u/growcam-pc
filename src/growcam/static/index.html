@@ -41,6 +41,18 @@
         </button>
       </nav>
 
+      <aside id="camera-control-note" class="camera-control-note" aria-live="polite" hidden>
+        <span class="nf" aria-hidden="true"></span>
+        <div class="camera-control-copy">
+          <strong>Camera controls unavailable</strong>
+          <p id="camera-control-error">Storage and recordings require the camera control connection.</p>
+        </div>
+        <button id="camera-control-retry" class="compact amber-button" type="button">
+          <span class="nf" aria-hidden="true">󰑓</span>
+          Retry camera controls
+        </button>
+      </aside>
+
       <section id="panel-live" class="tab-panel" role="tabpanel" aria-labelledby="tab-live">
         <section class="viewer live-accent" aria-label="Live camera view">
           <div class="feed-label"><span class="pulse" aria-hidden="true"></span> LIVE</div>
@@ -54,20 +66,16 @@
           <div class="viewer-bar">
             <span><span class="nf" aria-hidden="true"></span> Live · <span id="live-resolution">connecting</span> <span id="live-audio-state">· audio off</span></span>
             <div class="viewer-actions">
+              <div class="quality-selector" role="group" aria-label="Live video quality">
+                <button class="compact quality-button" type="button" data-live-quality="sd" aria-pressed="false">SD</button>
+                <button class="compact quality-button selected" type="button" data-live-quality="fhd" aria-pressed="true">FHD</button>
+              </div>
               <audio id="live-audio" data-src="/stream.mp3" preload="none"></audio>
               <button id="live-audio-toggle" class="compact" type="button"><span class="nf" aria-hidden="true">󰝟</span> Enable audio</button>
               <a class="icon-link" href="/snapshot.jpg" download="growcam-snapshot.jpg"><span class="nf" aria-hidden="true"></span> Snapshot</a>
             </div>
           </div>
         </section>
-
-        <aside id="camera-control-note" class="camera-control-note" aria-live="polite" hidden>
-          <span class="nf" aria-hidden="true"></span>
-          <div>
-            <strong>Camera controls unavailable</strong>
-            <p id="camera-control-error">Storage and recordings require the camera control connection.</p>
-          </div>
-        </aside>
 
         <section class="metrics" aria-label="Camera status">
           <article class="metric-device">

@@ -82,13 +82,19 @@ def test_download_removes_partial_file_after_stream_failure(
 
 
 def test_require_ok_includes_camera_return_code() -> None:
-    with pytest.raises(DVRIPError, match=r"Ret=101"):
+    with pytest.raises(DVRIPError, match=r"Ret=101") as raised:
         DVRIPClient._require_ok("login", {"Ret": 101})
+
+    assert raised.value.operation == "login"
+    assert raised.value.return_code == 101
 
 
 def test_require_ok_explains_locked_login() -> None:
-    with pytest.raises(DVRIPError, match=r"Ret=205.*user is locked"):
+    with pytest.raises(DVRIPError, match=r"Ret=205.*user is locked") as raised:
         DVRIPClient._require_ok("login", {"Ret": 205})
+
+    assert raised.value.operation == "login"
+    assert raised.value.return_code == 205
 
 
 def test_close_logs_out_authenticated_session(monkeypatch: pytest.MonkeyPatch) -> None:

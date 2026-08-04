@@ -11,7 +11,10 @@ const liveFeed = document.querySelector("#live-feed");
 const liveAudio = document.querySelector("#live-audio");
 const livePlaceholder = document.querySelector("#live-placeholder");
 const liveMessage = document.querySelector("#live-message");
+const liveQualityButtons = [...document.querySelectorAll("[data-live-quality]")];
+const cameraControlRetry = document.querySelector("#camera-control-retry");
 const tabButtons = [...document.querySelectorAll(".app-tab")];
+const cameraControlTabs = new Set(["rewind", "timelapse", "files"]);
 
 let timelapseData = null;
 let historyData = null;
@@ -30,6 +33,14 @@ let appReady = false;
 let historyLoaded = false;
 let timelapseLoaded = false;
 let filesLoaded = false;
+let historyLoadPromise = null;
+let timelapseLoadPromise = null;
+let filesLoadPromise = null;
+let historyPreviewOpening = false;
+let cameraControlAvailable = false;
+let cameraControlState = null;
+let liveQuality = storedLiveQuality();
+let liveRestartTimer = null;
 
 const nativeHevcSupported = browserSupportsNativeHevc();
 const timelapseStreamToCacheScale = 2 / 25;
@@ -111,10 +122,50 @@ function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function storedLiveQuality() {
+  try {
+    return window.localStorage.getItem("growcam-live-quality") === "sd" ? "sd" : "fhd";
+  } catch {
+    return "fhd";
+  }
+}
+
+function rememberLiveQuality() {
+  try {
+    window.localStorage.setItem("growcam-live-quality", liveQuality);
+  } catch {
+    // Private browsing or a locked-down browser may disable local storage.
+  }
+}
+
+function updateLiveQualityButtons(disabled = false) {
+  for (const button of liveQualityButtons) {
+    const selected = button.dataset.liveQuality === liveQuality;
+    button.classList.toggle("selected", selected);
+    button.setAttribute("aria-pressed", String(selected));
+    button.disabled = disabled;
+  }
+}
+
+function liveStreamUrl() {
+  return `${liveFeed.dataset.src}?quality=${encodeURIComponent(liveQuality)}`;
+}
+
+class HttpError extends Error {
+  constructor(message, status, payload) {
+    super(message);
+    this.name = "HttpError";
+    this.status = status;
+    this.payload = payload;
+  }
+}
+
 async function getJson(url, options = {}) {
   const response = await fetch(url, { cache: "no-store", ...options });
   const payload = await response.json();
-  if (!response.ok) throw new Error(payload.error || `Request failed (${response.status})`);
+  if (!response.ok) {
+    throw new HttpError(payload.error || `Request failed (${response.status})`, response.status, payload);
+  }
   return payload;
 }
 
@@ -220,8 +271,7 @@ function loadTimeLabel(startedAt) {
   return seconds < 10 ? `${seconds.toFixed(1)} seconds` : `${Math.round(seconds)} seconds`;
 }
 
-async function loadInfo() {
-  const info = await getJson("/api/info");
+function renderCameraInfo(info) {
   const system = info.system || {};
   const partition = info.storage?.[0]?.Partition?.[0] || {};
   const totalMib = hexKibibytes(partition.TotalSpace);
@@ -232,10 +282,84 @@ async function loadInfo() {
   document.querySelector("#storage-free").textContent = formatSize(freeMib * 1024 ** 2);
   document.querySelector("#storage-percent").textContent = totalMib ? `${((freeMib / totalMib) * 100).toFixed(1)}% available` : "Capacity unavailable";
   document.querySelector("#storage-window").textContent = `${partition.OldStartTime || "—"} → ${partition.NewEndTime || "—"}`;
+  cameraControlAvailable = true;
+  cameraControlState = info.cameraControl || { status: "available", available: true };
+  updateCameraControlTabIndicators(false);
+  updateCameraControlRetry();
   document.querySelector("#camera-control-note").hidden = true;
 }
 
+async function loadInfo() {
+  renderCameraInfo(await getJson("/api/info"));
+}
+
+function cameraControlStateFromError(error) {
+  const state = error instanceof HttpError ? error.payload?.cameraControl : null;
+  return state && typeof state === "object" ? state : null;
+}
+
+function updateCameraControlTabIndicators(unavailable) {
+  for (const button of tabButtons) {
+    if (!cameraControlTabs.has(button.dataset.tab)) continue;
+    button.classList.toggle("control-unavailable", unavailable);
+    if (unavailable) {
+      button.title = "Camera controls are paused; this tab will not contact the camera.";
+    } else {
+      button.removeAttribute("title");
+    }
+  }
+}
+
+function updateCameraControlRetry() {
+  const locked = cameraControlState?.locked === true;
+  const retryAllowed = !locked && cameraControlState?.retryAllowed === true;
+  const retryExhausted = cameraControlState?.circuitOpen === true && !locked && !retryAllowed;
+  cameraControlRetry.disabled = !retryAllowed;
+  cameraControlRetry.innerHTML = locked
+    ? '<span class="nf" aria-hidden="true"></span> Retry disabled after Ret=205'
+    : retryExhausted
+      ? '<span class="nf" aria-hidden="true">󰌾</span> Retry disabled for this run'
+      : '<span class="nf" aria-hidden="true">󰑓</span> Retry camera controls';
+  if (locked) {
+    cameraControlRetry.title = "This server will not retry a locked camera account. Restart GrowCam after unlocking it.";
+  } else if (retryExhausted) {
+    cameraControlRetry.title = "GrowCam will not make another login attempt in this server run.";
+  } else {
+    cameraControlRetry.removeAttribute("title");
+  }
+}
+
+function renderProtectedTabUnavailable(name) {
+  let guidance = "Camera controls are paused. Use Retry camera controls above when you are ready.";
+  if (cameraControlState?.locked) {
+    guidance = "Camera reported an account lock. Unlock or reset it, then restart GrowCam.";
+  } else if (cameraControlState?.retryAllowed === false) {
+    guidance = "No more logins will be attempted in this server run. Verify access, then restart GrowCam.";
+  }
+  if (name === "rewind") document.querySelector("#history-status").textContent = guidance;
+  if (name === "timelapse") {
+    document.querySelector("#panel-timelapse").setAttribute("aria-busy", "false");
+    setStatus(document.querySelector("#timelapse-state"), "Controls paused", "warning");
+    document.querySelector("#timelapse-file-status").textContent = guidance;
+  }
+  if (name === "files") {
+    document.querySelector("#panel-files").setAttribute("aria-busy", "false");
+    document.querySelector("#files-status").textContent = guidance;
+  }
+}
+
 function renderCameraControlUnavailable(error) {
+  cameraControlAvailable = false;
+  cameraControlState = cameraControlStateFromError(error) || {
+    status: "blocked",
+    available: false,
+    circuitOpen: true,
+    retryAllowed: true,
+    locked: false,
+  };
+  historyLoaded = false;
+  timelapseLoaded = false;
+  filesLoaded = false;
   document.querySelector("#device").textContent = "Live stream only";
   document.querySelector("#firmware").textContent = "Camera control login unavailable";
   document.querySelector("#storage-total").textContent = "Unavailable";
@@ -244,7 +368,17 @@ function renderCameraControlUnavailable(error) {
   document.querySelector("#storage-window").textContent = "DVRIP access required";
 
   const note = document.querySelector("#camera-control-note");
-  document.querySelector("#camera-control-error").textContent = `${errorMessage(error)}. Live video uses RTSP and can still work; storage, rewind, time-lapse, and files require the camera control account configured when this server starts.`;
+  const detail = String(cameraControlState.message || errorMessage(error)).replace(/[.\s]+$/, "");
+  let nextStep = "Automatic DVRIP attempts are paused. Use the explicit retry button when you want to try once more.";
+  if (cameraControlState.locked) {
+    nextStep = "This server will not attempt another login after Ret=205. Unlock or reset the camera, then restart GrowCam.";
+  } else if (cameraControlState.retryAllowed === false) {
+    nextStep = "This server will not make another login attempt. Verify camera access, then restart GrowCam.";
+  }
+  document.querySelector("#camera-control-error").textContent = `${detail}. ${nextStep} Live video remains independent over RTSP.`;
+  updateCameraControlTabIndicators(true);
+  updateCameraControlRetry();
+  for (const name of cameraControlTabs) renderProtectedTabUnavailable(name);
   note.hidden = false;
 }
 
@@ -344,19 +478,57 @@ function activateTab(name, focus = false, reveal = false) {
   if (appReady) void ensureTabData(selectedTab);
 }
 
-function setLiveFeedActive(active) {
-  if (active) {
-    if (!liveFeed.hasAttribute("src")) {
-      liveMessage.textContent = "Starting live video…";
-      livePlaceholder.hidden = false;
-      liveFeed.src = liveFeed.dataset.src;
-    }
+function cancelLiveRestart() {
+  if (liveRestartTimer === null) return;
+  window.clearTimeout(liveRestartTimer);
+  liveRestartTimer = null;
+}
+
+function startLiveFeed() {
+  if (document.querySelector("#panel-live").hidden || liveFeed.hasAttribute("src")) return;
+  liveMessage.textContent = `Starting ${liveQuality.toUpperCase()} live video…`;
+  livePlaceholder.hidden = false;
+  liveFeed.src = liveStreamUrl();
+  updateLiveQualityButtons(false);
+}
+
+function restartLiveFeed() {
+  cancelLiveRestart();
+  liveFeed.removeAttribute("src");
+  liveMessage.textContent = `Switching to ${liveQuality.toUpperCase()}…`;
+  livePlaceholder.hidden = false;
+  updateLiveQualityButtons(true);
+  if (document.querySelector("#panel-live").hidden) {
+    updateLiveQualityButtons(false);
     return;
   }
+  // Let the browser cancel the old MJPEG response so its FFmpeg/RTSP process
+  // exits before the selected camera stream is opened.
+  liveRestartTimer = window.setTimeout(() => {
+    liveRestartTimer = null;
+    startLiveFeed();
+  }, 350);
+}
+
+function selectLiveQuality(quality) {
+  if (quality === liveQuality || !["sd", "fhd"].includes(quality)) return;
+  liveQuality = quality;
+  rememberLiveQuality();
+  updateLiveQualityButtons(true);
+  restartLiveFeed();
+}
+
+function setLiveFeedActive(active) {
+  if (active) {
+    startLiveFeed();
+    return;
+  }
+  cancelLiveRestart();
   liveFeed.removeAttribute("src");
   stopLiveAudio();
   liveMessage.textContent = "Live video paused.";
   livePlaceholder.hidden = false;
+  updateLiveQualityButtons(false);
 }
 
 function updateLiveAudioState(active, label) {
@@ -394,12 +566,20 @@ async function toggleLiveAudio() {
 }
 
 async function ensureTabData(name) {
+  if (cameraControlTabs.has(name) && !cameraControlAvailable) {
+    renderProtectedTabUnavailable(name);
+    return;
+  }
   try {
     if (name === "rewind" && !historyLoaded) await loadHistory();
     if (name === "timelapse" && !timelapseLoaded) await loadTimelapse();
     if (name === "files" && !filesLoaded) await loadFiles();
     if (name === "settings") await loadAppSettings();
   } catch (error) {
+    if (cameraControlTabs.has(name) && cameraControlStateFromError(error)) {
+      renderCameraControlUnavailable(error);
+      return;
+    }
     if (name === "rewind") document.querySelector("#history-status").textContent = errorMessage(error);
     if (name === "timelapse") {
       setStatus(document.querySelector("#timelapse-state"), "Camera unavailable", "error");
@@ -609,10 +789,19 @@ function renderHistory(payload) {
   setScrubberPosition(recordings.length ? recordingBounds(recordings[0]).start : 0);
 }
 
-async function loadHistory() {
+function loadHistory() {
+  if (historyLoadPromise) return historyLoadPromise;
+  historyLoadPromise = loadHistoryOnce().finally(() => { historyLoadPromise = null; });
+  return historyLoadPromise;
+}
+
+async function loadHistoryOnce() {
   const dateInput = document.querySelector("#history-date");
+  const todayButton = document.querySelector("#history-today");
   const status = document.querySelector("#history-status");
   const timelineCard = document.querySelector(".timeline-card");
+  dateInput.disabled = true;
+  todayButton.disabled = true;
   timelineCard.setAttribute("aria-busy", "true");
   status.textContent = "Loading recordings…";
   try {
@@ -620,6 +809,8 @@ async function loadHistory() {
     renderHistory(payload);
     historyLoaded = true;
   } finally {
+    dateInput.disabled = false;
+    todayButton.disabled = false;
     timelineCard.setAttribute("aria-busy", "false");
   }
 }
@@ -653,6 +844,10 @@ function selectScrubberMoment() {
 }
 
 function selectHistorySegment(index, atSeconds = null) {
+  if (historyPreviewOpening) {
+    document.querySelector("#history-status").textContent = "A preview is already opening; wait for it to finish.";
+    return;
+  }
   const recordings = historyData?.recordings || [];
   const recording = recordings[index];
   if (!recording) return;
@@ -673,6 +868,7 @@ function selectHistorySegment(index, atSeconds = null) {
 }
 
 async function buildHistoryPreview(recording, atSeconds) {
+  historyPreviewOpening = true;
   if (historyRequest) historyRequest.abort();
   historyRequest = new AbortController();
   const request = historyRequest;
@@ -735,6 +931,7 @@ async function buildHistoryPreview(recording, atSeconds) {
   } catch (error) {
     if (!(error instanceof DOMException && error.name === "AbortError")) status.textContent = errorMessage(error);
   } finally {
+    historyPreviewOpening = false;
     if (historyRequest === request) {
       if (!playbackStarted) historyRequest = null;
       card.setAttribute("aria-busy", "false");
@@ -805,8 +1002,16 @@ function renderTimelapseFiles(recordings) {
   document.querySelector("#timelapse-file-status").textContent = `${recordings.length} time-lapse file${recordings.length === 1 ? "" : "s"}.`;
 }
 
-async function loadTimelapse(forceFormRefresh = false) {
+function loadTimelapse(forceFormRefresh = false) {
+  if (timelapseLoadPromise) return timelapseLoadPromise;
+  timelapseLoadPromise = loadTimelapseOnce(forceFormRefresh).finally(() => { timelapseLoadPromise = null; });
+  return timelapseLoadPromise;
+}
+
+async function loadTimelapseOnce(forceFormRefresh) {
   const panel = document.querySelector("#panel-timelapse");
+  const refreshButton = document.querySelector("#refresh-timelapse");
+  refreshButton.disabled = true;
   panel.setAttribute("aria-busy", "true");
   setStatus(document.querySelector("#timelapse-state"), "Loading schedule", "pending");
   try {
@@ -815,6 +1020,7 @@ async function loadTimelapse(forceFormRefresh = false) {
     timelapseLoaded = true;
     renderTimelapse(payload, forceFormRefresh);
   } finally {
+    refreshButton.disabled = false;
     panel.setAttribute("aria-busy", "false");
   }
 }
@@ -924,17 +1130,29 @@ function renderFiles() {
   status.textContent = filesData?.files.length ? "No files match these filters." : "No files found for this day.";
 }
 
-async function loadFiles() {
+function loadFiles() {
+  if (filesLoadPromise) return filesLoadPromise;
+  filesLoadPromise = loadFilesOnce().finally(() => { filesLoadPromise = null; });
+  return filesLoadPromise;
+}
+
+async function loadFilesOnce() {
   const panel = document.querySelector("#panel-files");
   const status = document.querySelector("#files-status");
+  const dateInput = document.querySelector("#files-date");
+  const refreshButton = document.querySelector("#files-refresh");
+  dateInput.disabled = true;
+  refreshButton.disabled = true;
   panel.setAttribute("aria-busy", "true");
   status.hidden = false;
   status.textContent = "Loading camera files…";
   try {
-    filesData = await getJson(`/api/files?date=${encodeURIComponent(document.querySelector("#files-date").value)}`);
+    filesData = await getJson(`/api/files?date=${encodeURIComponent(dateInput.value)}`);
     filesLoaded = true;
     renderFiles();
   } finally {
+    dateInput.disabled = false;
+    refreshButton.disabled = false;
     panel.setAttribute("aria-busy", "false");
   }
 }
@@ -1049,7 +1267,7 @@ async function buildPreview(recording) {
     if (previewRequest === request) {
       if (!playbackStarted) previewRequest = null;
       card.removeAttribute("aria-busy");
-      latestButton.disabled = timelapseData?.recordings.length === 0;
+      latestButton.disabled = !timelapseData?.recordings.length;
       fileButtons.forEach((button) => { button.disabled = false; });
     }
   }
@@ -1075,6 +1293,35 @@ async function refresh() {
   const activeTab = tabButtons.find((button) => button.getAttribute("aria-selected") === "true");
   const activeTabName = activeTab?.dataset.tab || "live";
   if (activeTabName !== "settings") await ensureTabData(activeTabName);
+}
+
+async function retryCameraControls() {
+  cameraControlRetry.disabled = true;
+  cameraControlRetry.innerHTML = '<span class="nf" aria-hidden="true"></span> Trying one login…';
+  setStatus(connection, "Retrying camera controls", "pending");
+  try {
+    const info = await getJson("/api/camera-control/retry", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-GrowCam-Request": "1",
+      },
+      body: "{}",
+    });
+    historyLoaded = false;
+    timelapseLoaded = false;
+    filesLoaded = false;
+    renderCameraInfo(info);
+    setStatus(connection, "Camera connected");
+    const activeTab = tabButtons.find((button) => button.getAttribute("aria-selected") === "true");
+    const activeTabName = activeTab?.dataset.tab || "live";
+    if (cameraControlTabs.has(activeTabName)) await ensureTabData(activeTabName);
+  } catch (error) {
+    renderCameraControlUnavailable(error);
+    setStatus(connection, "Live feed only", "warning");
+  } finally {
+    updateCameraControlRetry();
+  }
 }
 
 timelapseForm.addEventListener("input", () => {
@@ -1174,6 +1421,9 @@ document.querySelector("#refresh-timelapse").addEventListener("click", async () 
   }
 });
 document.querySelector("#preview-latest").addEventListener("click", async () => {
+  const button = document.querySelector("#preview-latest");
+  if (button.disabled) return;
+  button.disabled = true;
   try {
     await loadTimelapse();
     const latest = timelapseData?.recordings[0];
@@ -1181,6 +1431,8 @@ document.querySelector("#preview-latest").addEventListener("click", async () => 
   } catch (error) {
     document.querySelector("#preview-title").textContent = "Preview unavailable";
     document.querySelector("#preview-status").textContent = errorMessage(error);
+  } finally {
+    button.disabled = !timelapseData?.recordings.length;
   }
 });
 document.querySelector("#timelapse-speed").addEventListener("change", (event) => {
@@ -1211,6 +1463,12 @@ for (const button of tabButtons) {
   });
 }
 
+for (const button of liveQualityButtons) {
+  button.addEventListener("click", () => selectLiveQuality(button.dataset.liveQuality));
+}
+
+cameraControlRetry.addEventListener("click", () => void retryCameraControls());
+
 window.addEventListener("hashchange", () => activateTab(window.location.hash.slice(1) || "live"));
 
 window.addEventListener("pagehide", () => {
@@ -1222,13 +1480,16 @@ liveFeed.addEventListener("load", () => {
   const resolution = liveFeed.naturalWidth && liveFeed.naturalHeight
     ? `${liveFeed.naturalWidth} × ${liveFeed.naturalHeight}`
     : "connected";
-  document.querySelector("#live-resolution").textContent = resolution;
+  document.querySelector("#live-resolution").textContent = `${liveQuality.toUpperCase()} · ${resolution}`;
   livePlaceholder.hidden = true;
+  updateLiveQualityButtons(false);
 });
 liveFeed.addEventListener("error", () => {
+  if (!liveFeed.hasAttribute("src") || liveRestartTimer !== null) return;
   document.querySelector("#live-resolution").textContent = "unavailable";
   liveMessage.textContent = "Live feed unavailable. Check the camera connection and FFmpeg.";
   livePlaceholder.hidden = false;
+  updateLiveQualityButtons(false);
 });
 liveAudio.addEventListener("playing", () => updateLiveAudioState(true, "audio live"));
 liveAudio.addEventListener("error", () => {
@@ -1236,5 +1497,6 @@ liveAudio.addEventListener("error", () => {
   document.querySelector("#live-audio-state").textContent = "· audio unavailable";
 });
 
+updateLiveQualityButtons();
 activateTab(window.location.hash.slice(1) || "live");
 refresh();

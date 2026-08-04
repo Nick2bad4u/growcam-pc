@@ -12,8 +12,10 @@ import sys
 import threading
 import time as time_module
 from collections import OrderedDict
+from contextlib import contextmanager, suppress
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, time, timedelta
+from enum import StrEnum
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
@@ -25,11 +27,12 @@ from urllib.parse import parse_qs, urlparse
 from typing_extensions import override
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Generator, Mapping
+    from contextlib import AbstractContextManager
     from io import BufferedIOBase
     from typing import BinaryIO
 
-from .dvrip import DVRIPClient
+from .dvrip import DVRIPClient, DVRIPError
 from .media import (
     MediaError,
     build_fragmented_preview,
@@ -40,7 +43,7 @@ from .media import (
     start_live_audio,
     start_mjpeg,
 )
-from .media_cache import MediaCache
+from .media_cache import MediaCache, MediaCacheBusyError
 from .settings import (
     SettingsConflictError,
     SettingsError,
@@ -68,6 +71,8 @@ _TIMELAPSE_PREVIEW_VERSION = "indexed-v22-unthrottled-progress"
 _TIMELAPSE_STREAM_FRAMES_PER_SECOND = 2.0
 _TIMELAPSE_CACHED_FRAMES_PER_SECOND = 25.0
 _WINDOWS_ADDRESS_IN_USE = 10048
+_LOCKED_LOGIN_RETURN_CODE = 205
+_ACCOUNT_REJECTION_RETURN_CODES = frozenset({106, 203, 204, 205, 206, 207, 430})
 _CONTENT_SECURITY_POLICY = (
     "default-src 'self'; base-uri 'none'; connect-src 'self'; form-action 'self'; "
     "frame-ancestors 'none'; img-src 'self' blob:; media-src 'self' blob:; object-src 'none'; "
@@ -103,6 +108,240 @@ class WebConfig:
     password: str = ""
 
 
+class CameraControlStatus(StrEnum):
+    """Lifecycle states for the server-wide DVRIP control connection."""
+
+    UNVERIFIED = "unverified"
+    AVAILABLE = "available"
+    BLOCKED = "blocked"
+
+
+class LiveQuality(StrEnum):
+    """Camera RTSP profiles exposed by the dashboard."""
+
+    SD = "sd"
+    FHD = "fhd"
+
+
+@dataclass(frozen=True)
+class LiveStreamProfile:
+    """Camera stream index and browser-facing MJPEG output width."""
+
+    stream_index: int
+    output_width: int
+
+
+_LIVE_STREAM_PROFILES = {
+    LiveQuality.SD: LiveStreamProfile(stream_index=1, output_width=800),
+    LiveQuality.FHD: LiveStreamProfile(stream_index=0, output_width=1920),
+}
+
+
+@dataclass(frozen=True)
+class CameraControlState:
+    """Thread-safe snapshot of whether new DVRIP logins are permitted."""
+
+    status: CameraControlStatus
+    message: str | None = None
+    return_code: int | None = None
+    manual_retry_permitted: bool = False
+
+    @property
+    def retry_allowed(self) -> bool:
+        """Allow at most one explicit retry for a non-account failure."""
+        return (
+            self.status is CameraControlStatus.BLOCKED
+            and self.manual_retry_permitted
+            and self.return_code != _LOCKED_LOGIN_RETURN_CODE
+        )
+
+    def to_api(self) -> dict[str, object]:
+        """Return the stable browser representation of this state."""
+        return {
+            "status": self.status.value,
+            "available": self.status is CameraControlStatus.AVAILABLE,
+            "circuitOpen": self.status is CameraControlStatus.BLOCKED,
+            "retryAllowed": self.retry_allowed,
+            "locked": (self.status is CameraControlStatus.BLOCKED and self.return_code == _LOCKED_LOGIN_RETURN_CODE),
+            "returnCode": self.return_code,
+            "message": self.message,
+        }
+
+
+class CameraControlError(WebRequestError):
+    """Report an open DVRIP circuit without touching the camera again."""
+
+    def __init__(self, state: CameraControlState) -> None:
+        """Retain the control state for the browser error payload."""
+        super().__init__(
+            HTTPStatus.LOCKED,
+            state.message or "Camera controls are paused until an explicit retry",
+        )
+        self.state = state
+
+
+class CameraControlBusyError(WebRequestError):
+    """Reject extra camera work instead of queueing another DVRIP operation."""
+
+    def __init__(self) -> None:
+        """Return a retryable conflict without opening another camera connection."""
+        super().__init__(
+            HTTPStatus.CONFLICT,
+            "Camera controls are busy; wait for the current operation to finish",
+        )
+
+
+class CameraControlCoordinator:
+    """Own one persistent DVRIP session and reject overlapping camera work."""
+
+    def __init__(self, config: WebConfig) -> None:
+        """Create an unverified coordinator for one immutable camera configuration."""
+        self._config = config
+        self._operation_lock = threading.Lock()
+        self._state_lock = threading.Lock()
+        self._state = CameraControlState(CameraControlStatus.UNVERIFIED)
+        self._closed = False
+        self._client: DVRIPClient | None = None
+        self._keepalive_stop = threading.Event()
+        self._keepalive_thread: threading.Thread | None = None
+
+    def snapshot(self) -> CameraControlState:
+        """Return the current immutable state without waiting for a camera operation."""
+        with self._state_lock:
+            return self._state
+
+    @contextmanager
+    def camera(self, *, explicit_retry: bool = False) -> Generator[DVRIPClient, None, None]:
+        """Yield the shared authenticated client or reject overlapping work."""
+        if not self._operation_lock.acquire(blocking=False):
+            raise CameraControlBusyError
+        try:
+            with self._state_lock:
+                state = self._state
+                closed = self._closed
+            if closed:
+                raise CameraControlError(state)
+            if state.status is CameraControlStatus.BLOCKED and (not explicit_retry or not state.retry_allowed):
+                raise CameraControlError(state)
+
+            camera = self._client
+            if camera is None:
+                camera = DVRIPClient(
+                    self._config.camera_host,
+                    self._config.camera_port,
+                    self._config.username,
+                    self._config.password,
+                )
+                try:
+                    _ = camera.connect()
+                except (DVRIPError, OSError, TypeError, ValueError) as error:
+                    state = self._blocked_state(
+                        error,
+                        allow_retry=not explicit_retry and self._manual_retry_is_safe(error),
+                    )
+                    with suppress(DVRIPError, OSError, TypeError, ValueError):
+                        camera.close()
+                    self._set_state(state)
+                    raise CameraControlError(state) from error
+                self._client = camera
+                self._set_state(CameraControlState(CameraControlStatus.AVAILABLE))
+                self._ensure_keepalive_thread()
+            try:
+                yield camera
+            except (DVRIPError, OSError, TypeError, ValueError) as error:
+                self._block_client(
+                    error,
+                    allow_retry=not explicit_retry and self._manual_retry_is_safe(error),
+                )
+                raise
+        finally:
+            self._operation_lock.release()
+
+    def close(self) -> None:
+        """Stop background heartbeats, log out once, and release the process lock."""
+        with self._state_lock:
+            self._closed = True
+            self._state = CameraControlState(
+                CameraControlStatus.BLOCKED,
+                "Camera controls are closed because the GrowCam server is shutting down",
+            )
+            self._keepalive_stop.set()
+            keepalive_thread = self._keepalive_thread
+        if keepalive_thread is not None and keepalive_thread is not threading.current_thread():
+            keepalive_thread.join()
+        with self._operation_lock:
+            camera = self._client
+            self._client = None
+            if camera is not None:
+                camera.close()
+
+    def _ensure_keepalive_thread(self) -> None:
+        with self._state_lock:
+            if self._closed:
+                return
+            keepalive_thread = self._keepalive_thread
+            if keepalive_thread is not None and keepalive_thread.is_alive():
+                return
+            self._keepalive_stop.clear()
+            self._keepalive_thread = threading.Thread(
+                target=self._run_keepalives,
+                name="growcam-web-dvrip-keepalive",
+                daemon=True,
+            )
+            self._keepalive_thread.start()
+
+    def _run_keepalives(self) -> None:
+        while not self._keepalive_stop.wait(self._keepalive_interval()):
+            if not self._operation_lock.acquire(blocking=False):
+                continue
+            try:
+                camera = self._client
+                if camera is None:
+                    continue
+                try:
+                    camera.keepalive()
+                except (DVRIPError, OSError, TypeError, ValueError) as error:
+                    self._block_client(error, allow_retry=self._manual_retry_is_safe(error))
+            finally:
+                self._operation_lock.release()
+
+    def _keepalive_interval(self) -> float:
+        camera = self._client
+        if camera is None or camera.login_info is None:
+            return 1.0
+        return max(1.0, min(10.0, camera.login_info.keepalive_interval / 2))
+
+    def _block_client(self, error: Exception, *, allow_retry: bool) -> None:
+        camera = self._client
+        self._client = None
+        if camera is not None:
+            with suppress(DVRIPError, OSError, TypeError, ValueError):
+                camera.close()
+        self._set_state(self._blocked_state(error, allow_retry=allow_retry))
+
+    @staticmethod
+    def _blocked_state(error: Exception, *, allow_retry: bool) -> CameraControlState:
+        return CameraControlState(
+            status=CameraControlStatus.BLOCKED,
+            message=str(error),
+            return_code=error.return_code if isinstance(error, DVRIPError) else None,
+            manual_retry_permitted=allow_retry,
+        )
+
+    @staticmethod
+    def _manual_retry_is_safe(error: Exception) -> bool:
+        """Refuse retries after any camera-side account or login rejection."""
+        if not isinstance(error, DVRIPError):
+            return True
+        return error.operation != "login" and error.return_code not in _ACCOUNT_REJECTION_RETURN_CODES
+
+    def _set_state(self, state: CameraControlState) -> None:
+        with self._state_lock:
+            if self._closed:
+                return
+            self._state = state
+
+
 class GrowCamHTTPServer(ThreadingHTTPServer):
     """Threaded HTTP server carrying immutable camera configuration."""
 
@@ -118,6 +357,7 @@ class GrowCamHTTPServer(ThreadingHTTPServer):
     ) -> None:
         """Create a server for one immutable camera configuration."""
         self.config = config
+        self.camera_controls = CameraControlCoordinator(config)
         self.camera_operation_lock = threading.Lock()
         self.recording_metadata_lock = threading.Lock()
         self.recording_metadata: OrderedDict[str, tuple[float, dict[str, object]]] = OrderedDict()
@@ -176,6 +416,14 @@ class GrowCamHTTPServer(ThreadingHTTPServer):
             )
         super().server_bind()
 
+    @override
+    def server_close(self) -> None:
+        """Release the persistent DVRIP session before closing the HTTP socket."""
+        try:
+            self.camera_controls.close()
+        finally:
+            super().server_close()
+
 
 class GrowCamHandler(BaseHTTPRequestHandler):
     """Serve static UI assets and guarded camera API endpoints."""
@@ -211,6 +459,8 @@ class GrowCamHandler(BaseHTTPRequestHandler):
                 self._static("favicon.svg", "image/svg+xml")
             elif request.path == "/api/info":
                 self._json(self._camera_info())
+            elif request.path == "/api/camera-control":
+                self._json(cast("GrowCamHTTPServer", self.server).camera_controls.snapshot().to_api())
             elif request.path == "/api/settings":
                 self._json(self._settings_state())
             elif request.path == "/api/recordings":
@@ -252,7 +502,8 @@ class GrowCamHandler(BaseHTTPRequestHandler):
             elif request.path == "/snapshot.jpg":
                 self._snapshot()
             elif request.path == "/stream.mjpg":
-                self._mjpeg()
+                query = parse_qs(request.query)
+                self._mjpeg(_live_quality(query.get("quality", [LiveQuality.FHD.value])[0]))
             elif request.path == "/stream.mp3":
                 self._live_audio()
             else:
@@ -263,15 +514,27 @@ class GrowCamHandler(BaseHTTPRequestHandler):
             # response may already be committed, so emitting a JSON 502 here
             # creates a false console error and a malformed second response.
             self.close_connection = True
+        except MediaCacheBusyError as error:
+            self._json({"error": str(error)}, status=HTTPStatus.CONFLICT)
+        except CameraControlError as error:
+            self._json(
+                {"error": str(error), "cameraControl": error.state.to_api()},
+                status=error.status,
+            )
         except WebRequestError as error:
             self._json({"error": str(error)}, status=error.status)
         except (OSError, ValueError, RuntimeError) as error:
             self._json({"error": str(error)}, status=HTTPStatus.BAD_GATEWAY)
 
-    def do_POST(self) -> None:  # noqa: C901 - each guarded update keeps its explicit error mapping here.
+    def do_POST(self) -> None:  # noqa: C901, PLR0912 - each guarded update keeps explicit error mapping here.
         """Apply one guarded local configuration update."""
         request = urlparse(self.path)
-        if request.path not in {"/api/timelapse", "/api/settings", "/api/cache/clear"}:
+        if request.path not in {
+            "/api/timelapse",
+            "/api/settings",
+            "/api/cache/clear",
+            "/api/camera-control/retry",
+        }:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         try:
@@ -280,8 +543,15 @@ class GrowCamHandler(BaseHTTPRequestHandler):
                 self._apply_timelapse_settings(payload)
             elif request.path == "/api/settings":
                 self._apply_app_settings(payload)
+            elif request.path == "/api/camera-control/retry":
+                self._retry_camera_controls(payload)
             else:
                 self._clear_media_cache(payload)
+        except CameraControlError as error:
+            self._json(
+                {"error": str(error), "cameraControl": error.state.to_api()},
+                status=error.status,
+            )
         except WebRequestError as error:
             self._json({"error": str(error)}, status=error.status)
         except SettingsValidationError as error:
@@ -338,17 +608,18 @@ class GrowCamHandler(BaseHTTPRequestHandler):
             raise WebRequestError(HTTPStatus.CONFLICT, str(error)) from error
         self._json({"cache": stats.to_api()})
 
-    def _camera(self) -> DVRIPClient:
-        config = cast("GrowCamHTTPServer", self.server).config
-        return DVRIPClient(
-            config.camera_host,
-            config.camera_port,
-            config.username,
-            config.password,
-        )
+    def _retry_camera_controls(self, payload: dict[str, object]) -> None:
+        if payload:
+            raise WebRequestError(HTTPStatus.BAD_REQUEST, "Camera control retry must be an empty JSON object")
+        self._json(self._camera_info(explicit_retry=True))
 
-    def _camera_info(self) -> dict[str, Any]:
-        with self._camera() as camera:
+    def _camera(self, *, explicit_retry: bool = False) -> AbstractContextManager[DVRIPClient]:
+        server = cast("GrowCamHTTPServer", self.server)
+        return server.camera_controls.camera(explicit_retry=explicit_retry)
+
+    def _camera_info(self, *, explicit_retry: bool = False) -> dict[str, Any]:
+        server = cast("GrowCamHTTPServer", self.server)
+        with self._camera(explicit_retry=explicit_retry) as camera:
             if camera.login_info is None:
                 raise RuntimeError("Camera login metadata is unavailable")
             return {
@@ -356,6 +627,7 @@ class GrowCamHandler(BaseHTTPRequestHandler):
                 "system": camera.system_info("SystemInfo"),
                 "storage": camera.system_info("StorageInfo"),
                 "workState": camera.system_info("WorkState"),
+                "cameraControl": server.camera_controls.snapshot().to_api(),
             }
 
     def _settings_state(self) -> dict[str, object]:
@@ -483,19 +755,18 @@ class GrowCamHandler(BaseHTTPRequestHandler):
         _claim_camera_operation(server)
         try:
             record: dict[str, object]
-            if match.group("event") == "E":
+            cached_record = server.cached_recording(camera_file)
+            if cached_record is not None:
+                record = cached_record
+            elif match.group("event") == "E":
                 record = _matching_recording(self._timelapse_state(), camera_file)
             else:
-                cached_record = server.cached_recording(camera_file)
-                if cached_record is None:
-                    selected_date = date.fromisoformat(match.group("date"))
-                    day_start = datetime.combine(selected_date, time.min)
-                    day_end = min(day_start + timedelta(days=1), datetime.now())
-                    if day_end <= day_start:
-                        raise WebRequestError(HTTPStatus.NOT_FOUND, "No recording exists for that future date")
-                    record = self._history_recording(camera_file, selected_date, day_start, day_end)
-                else:
-                    record = cached_record
+                selected_date = date.fromisoformat(match.group("date"))
+                day_start = datetime.combine(selected_date, time.min)
+                day_end = min(day_start + timedelta(days=1), datetime.now())
+                if day_end <= day_start:
+                    raise WebRequestError(HTTPStatus.NOT_FOUND, "No recording exists for that future date")
+                record = self._history_recording(camera_file, selected_date, day_start, day_end)
             if cast("bool", record["active"]):
                 raise WebRequestError(
                     HTTPStatus.CONFLICT,
@@ -765,12 +1036,20 @@ class GrowCamHandler(BaseHTTPRequestHandler):
         status = HTTPStatus.ACCEPTED if building else HTTPStatus.OK
         self._json({"ready": False, "building": building}, status=status)
 
-    def _mjpeg(self) -> None:
+    def _mjpeg(self, quality: LiveQuality) -> None:
         config = cast("GrowCamHTTPServer", self.server).config
-        process = start_mjpeg(config.camera_host, config.username, config.password)
+        profile = _LIVE_STREAM_PROFILES[quality]
+        process = start_mjpeg(
+            config.camera_host,
+            config.username,
+            config.password,
+            width=profile.output_width,
+            stream_index=profile.stream_index,
+        )
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=growcam")
         self.send_header("Cache-Control", "no-store")
+        self.send_header("X-GrowCam-Live-Quality", quality.value)
         self.end_headers()
         try:
             if process.stdout is None:
@@ -1126,6 +1405,14 @@ def _preview_video_codec(value: str) -> str:
     if value not in {"h264", "hevc"}:
         raise WebRequestError(HTTPStatus.BAD_REQUEST, "videoCodec must be h264 or hevc")
     return value
+
+
+def _live_quality(value: str) -> LiveQuality:
+    """Validate one browser live-view quality selector value."""
+    try:
+        return LiveQuality(value.casefold())
+    except ValueError as error:
+        raise WebRequestError(HTTPStatus.BAD_REQUEST, "Live quality must be 'sd' or 'fhd'") from error
 
 
 def _byte_range(header: str | None, file_size: int) -> tuple[int, int] | None:

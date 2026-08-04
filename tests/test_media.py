@@ -25,6 +25,19 @@ def test_rtsp_url_quotes_credentials() -> None:
     assert media.rtsp_url("192.0.2.1", "a@b", "p:/?") == "rtsp://a%40b:p%3A%2F%3F@192.0.2.1:554/"
 
 
+def test_rtsp_url_selects_xmeye_main_and_substreams() -> None:
+    main = media.rtsp_url("192.0.2.1", "admin", "", stream_index=0)
+    substream = media.rtsp_url("192.0.2.1", "admin", "", stream_index=1)
+
+    assert main == "rtsp://192.0.2.1:554/user=admin&password=tlJwpbo6&channel=1&stream=0.sdp"
+    assert substream == "rtsp://192.0.2.1:554/user=admin&password=tlJwpbo6&channel=1&stream=1.sdp"
+
+
+def test_rtsp_url_rejects_unknown_camera_stream() -> None:
+    with pytest.raises(ValueError, match=r"0 \(main\) or 1 \(substream\)"):
+        _ = media.rtsp_url("192.0.2.1", stream_index=2)
+
+
 def test_ffmpeg_reports_missing_executable(monkeypatch: pytest.MonkeyPatch) -> None:
     def missing_executable(_name: str) -> None:
         return None
@@ -64,7 +77,7 @@ def test_snapshot_reports_ffmpeg_stderr(monkeypatch: pytest.MonkeyPatch) -> None
         _ = media.snapshot("192.0.2.1")
 
 
-def test_mjpeg_stream_uses_requested_rate_and_width(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_mjpeg_stream_uses_requested_camera_stream_rate_and_width(monkeypatch: pytest.MonkeyPatch) -> None:
     observed_command: list[str] = []
     process = cast("subprocess.Popen[bytes]", object())
 
@@ -80,8 +93,9 @@ def test_mjpeg_stream_uses_requested_rate_and_width(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr("growcam.media._ffmpeg", lambda: "ffmpeg")
     monkeypatch.setattr("growcam.media.subprocess.Popen", fake_popen)
 
-    assert media.start_mjpeg("192.0.2.1", frames_per_second=8, width=960) is process
+    assert media.start_mjpeg("192.0.2.1", frames_per_second=8, width=960, stream_index=1) is process
     assert "fps=8,scale=960:-2" in observed_command
+    assert "rtsp://192.0.2.1:554/user=admin&password=tlJwpbo6&channel=1&stream=1.sdp" in observed_command
     assert "growcam" in observed_command
 
 

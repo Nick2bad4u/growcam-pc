@@ -36,6 +36,10 @@ class CacheStats:
         }
 
 
+class MediaCacheBusyError(RuntimeError):
+    """Raised when a distinct camera media operation is already active."""
+
+
 class MediaCache:
     """Coalesce identical builds and retain a bounded set of completed previews."""
 
@@ -152,9 +156,16 @@ class MediaCache:
         future: Future[Path],
         builder: Callable[[Path], None],
     ) -> tuple[Path, bool]:
+        operation_claimed = self._operation_lock.acquire(blocking=False)
+        if not operation_claimed:
+            error = MediaCacheBusyError(
+                "Another camera media operation is active; wait before opening a different preview"
+            )
+            future.set_exception(error)
+            self._discard_inflight(key, future)
+            raise error
         try:
-            with self._operation_lock:
-                builder(destination)
+            builder(destination)
             _require_preview(destination)
         except BaseException as error:
             with suppress(FileNotFoundError):
@@ -165,6 +176,7 @@ class MediaCache:
             future.set_result(destination)
             self._store_completed(key, destination)
         finally:
+            self._operation_lock.release()
             self._discard_inflight(key, future)
         return destination, False
 

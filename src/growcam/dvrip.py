@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Self, cast
 
+from .camera_lock import CameraLockUnavailableError, CameraProcessLock
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
     from pathlib import Path
@@ -41,6 +43,18 @@ _PLAYBACK_IDLE_TIMEOUT = 1.0
 
 class DVRIPError(RuntimeError):
     """Raised when the camera rejects or corrupts a DVRIP request."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        operation: str | None = None,
+        return_code: int | None = None,
+    ) -> None:
+        """Retain structured rejection details for safe retry decisions."""
+        super().__init__(message)
+        self.operation = operation
+        self.return_code = return_code
 
 
 @dataclass(frozen=True)
@@ -80,6 +94,7 @@ class DVRIPClient:
         self._session_id = 0
         self._sequence = 0
         self._admin_token = ""
+        self._process_lock: CameraProcessLock | None = None
         self.login_info: LoginInfo | None = None
 
     def __enter__(self) -> Self:
@@ -93,47 +108,61 @@ class DVRIPClient:
 
     def connect(self) -> LoginInfo:
         """Open the DVRIP connection and authenticate to the camera."""
-        if self._socket is not None:
+        if self._socket is not None or self._process_lock is not None:
             raise DVRIPError("Client is already connected")
-        self._socket = socket.create_connection((self.host, self.port), self.timeout)
-        self._socket.settimeout(self.timeout)
-        response = self._request(
-            1000,
-            {
-                "EncryptType": "MD5",
-                "LoginType": "DVRIP-Web",
-                "PassWord": sofia_hash(self.password),
-                "UserName": self.username,
-            },
-            include_session=False,
-        )
-        self._require_ok("login", response)
-        session = response.get("SessionID", 0)
-        self._session_id = int(session, 16) if isinstance(session, str) else int(session)
-        self._admin_token = str(response.get("AdminToken", ""))
-        device_type = str(response.get("DeviceType") or response.get("DeviceType ") or "XMEye").strip()
-        self.login_info = LoginInfo(
-            session_id=self._session_id,
-            channel_count=int(response.get("ChannelNum", 1)),
-            device_type=device_type,
-            keepalive_interval=int(response.get("AliveInterval", 20)),
-        )
+        try:
+            self._process_lock = CameraProcessLock.acquire(self.host, self.port)
+        except CameraLockUnavailableError as error:
+            raise DVRIPError(str(error), operation="local lock") from error
+        try:
+            self._socket = socket.create_connection((self.host, self.port), self.timeout)
+            self._socket.settimeout(self.timeout)
+            response = self._request(
+                1000,
+                {
+                    "EncryptType": "MD5",
+                    "LoginType": "DVRIP-Web",
+                    "PassWord": sofia_hash(self.password),
+                    "UserName": self.username,
+                },
+                include_session=False,
+            )
+            self._require_ok("login", response)
+            session = response.get("SessionID", 0)
+            self._session_id = int(session, 16) if isinstance(session, str) else int(session)
+            self._admin_token = str(response.get("AdminToken", ""))
+            device_type = str(response.get("DeviceType") or response.get("DeviceType ") or "XMEye").strip()
+            self.login_info = LoginInfo(
+                session_id=self._session_id,
+                channel_count=int(response.get("ChannelNum", 1)),
+                device_type=device_type,
+                keepalive_interval=int(response.get("AliveInterval", 20)),
+            )
+        except BaseException:
+            self.close()
+            raise
         return self.login_info
 
     def close(self) -> None:
         """Log out when authenticated, close the socket, and discard session credentials."""
-        if self._socket is not None:
-            try:
-                if self._session_id:
-                    self._logout()
-            finally:
+        try:
+            if self._socket is not None:
                 try:
-                    self._socket.close()
+                    if self._session_id:
+                        self._logout()
                 finally:
-                    self._socket = None
-                    self._session_id = 0
-                    self._admin_token = ""
-                    self.login_info = None
+                    try:
+                        self._socket.close()
+                    finally:
+                        self._socket = None
+                        self._session_id = 0
+                        self._admin_token = ""
+                        self.login_info = None
+        finally:
+            process_lock = self._process_lock
+            self._process_lock = None
+            if process_lock is not None:
+                process_lock.release()
 
     def _logout(self) -> None:
         """Release a camera-side session without letting cleanup failures mask the caller."""
@@ -565,8 +594,7 @@ class DVRIPClient:
         def send_keepalives() -> None:
             while not stop.wait(interval):
                 try:
-                    response = self._request(1006, {"Name": "KeepAlive"})
-                    self._require_ok("keepalive", response)
+                    self.keepalive()
                 except (OSError, RuntimeError) as error:
                     failures.append(error)
                     return
@@ -578,6 +606,11 @@ class DVRIPClient:
         )
         thread.start()
         return stop, thread, failures
+
+    def keepalive(self) -> None:
+        """Refresh the authenticated control session without opening another login."""
+        response = self._request(1006, {"Name": "KeepAlive"})
+        self._require_ok("keepalive", response)
 
     def _keepalive_interval(self) -> float:
         """Choose a heartbeat interval comfortably below the camera timeout."""
@@ -693,7 +726,11 @@ class DVRIPClient:
         if code not in allowed:
             detail = _LOGIN_REJECTION_DETAILS.get(code)
             suffix = f": {detail}" if operation == "login" and detail is not None else ""
-            raise DVRIPError(f"{operation} rejected by camera (Ret={code}){suffix}")
+            raise DVRIPError(
+                f"{operation} rejected by camera (Ret={code}){suffix}",
+                operation=operation,
+                return_code=code,
+            )
 
 
 def _receive_exact(connection: socket.socket, length: int) -> bytes:

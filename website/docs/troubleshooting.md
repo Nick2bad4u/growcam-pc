@@ -36,6 +36,8 @@ The live feed uses RTSP, while device details, storage, Rewind, Time-lapse, and 
 
 Check the terminal that started GrowCam PC for the camera's return code. Confirm that stale `GROWCAM_USERNAME` or `GROWCAM_PASSWORD` values are not overriding the defaults. The dashboard remains usable in **Live feed only** mode and labels the DVRIP-dependent features as unavailable.
 
+GrowCam PC reuses one DVRIP session for the entire dashboard run. Repeated clicks do not create extra logins: overlapping camera work receives a local busy response, and another GrowCam process is blocked before it can open a second control socket. Camera-side login rejections cannot be retried during that server run. A transient connection failure allows one explicit retry; if that retry also fails, restart only after checking the camera address and local credentials.
+
 ## Login fails with Ret=205 (user is locked)
 
 Stop retrying credentials. Automated username or password guessing can lock the camera's local account, and more attempts may prolong or retrigger the condition. The tested GrowCam C4 kept this lock through a normal power cycle.
