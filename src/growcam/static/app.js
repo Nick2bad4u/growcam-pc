@@ -846,9 +846,10 @@ function renderHistory(payload) {
   }).length;
   const playable = recordings.length - unplayable;
   const playableLabel = `${playable} playable block${playable === 1 ? "" : "s"}`;
+  const artifactLabel = unplayable === 1 ? "artifact" : "artifacts";
   const skippedLabel = unplayable === 0
     ? ""
-    : ` · ${unplayable} zero-duration camera artifact${unplayable === 1 ? "" : "s"} skipped`;
+    : ` · ${unplayable} zero-duration camera ${artifactLabel} skipped`;
   status.textContent = recordings.length === 0
     ? "No recordings found for this day."
     : `${playableLabel}${skippedLabel} · choose a time.`;
