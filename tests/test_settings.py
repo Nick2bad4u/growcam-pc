@@ -89,9 +89,10 @@ def test_stale_settings_revision_is_rejected_without_overwriting(tmp_path: Path)
     path = tmp_path / "settings.json"
     store = SettingsStore(path)
     first = store.update(expected_revision=0, values=_settings_values())
+    stale_values = _settings_values(cacheMaxEntries=12)
 
     with pytest.raises(SettingsConflictError, match="current revision 1"):
-        _ = store.update(expected_revision=0, values=_settings_values(cacheMaxEntries=12))
+        _ = store.update(expected_revision=0, values=stale_values)
 
     assert SettingsStore(path).snapshot() == first
 

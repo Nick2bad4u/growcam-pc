@@ -94,8 +94,9 @@ def test_browser_config_builds_one_guarded_daily_window() -> None:
 
 @pytest.mark.parametrize("interval", [0, 86_401])
 def test_interval_outside_firmware_range_is_rejected(interval: int) -> None:
+    camera_value = _camera_value(interval=interval)
     with pytest.raises(TimelapseValidationError, match="between 1 and 86400"):
-        _ = TimelapseConfig.from_camera(_camera_value(interval=interval))
+        _ = TimelapseConfig.from_camera(camera_value)
 
 
 def test_invalid_daily_window_is_rejected() -> None:

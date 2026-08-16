@@ -116,7 +116,7 @@ function localDateValue(value = new Date()) {
 
 function setStatus(element, message, kind = "") {
   element.textContent = message;
-  element.className = `status${kind ? ` ${kind}` : ""}`;
+  element.className = kind ? `status ${kind}` : "status";
 }
 
 function errorMessage(error) {
@@ -247,19 +247,23 @@ async function previewCacheState(url, signal) {
   return payload.building ? "building" : "missing";
 }
 
+async function resumeCachedVideo(video, url, request, isCurrent, timestampScale, onReady) {
+  const resumeAt = Math.max(0, video.currentTime * timestampScale);
+  const shouldResume = !video.paused && !video.ended;
+  await loadVideoStream(video, url, request.signal);
+  if (!isCurrent()) return;
+  if (Number.isFinite(video.duration) && video.duration > 0) {
+    video.currentTime = Math.min(resumeAt, Math.max(0, video.duration - 0.05));
+  }
+  if (shouldResume) await video.play().catch(() => {});
+  onReady();
+}
+
 async function promoteCachedVideo(video, url, request, isCurrent, timestampScale, onReady) {
   while (!request.signal.aborted && isCurrent()) {
     const state = await previewCacheState(url, request.signal);
     if (state === "ready") {
-      const resumeAt = Math.max(0, video.currentTime * timestampScale);
-      const shouldResume = !video.paused && !video.ended;
-      await loadVideoStream(video, url, request.signal);
-      if (!isCurrent()) return;
-      if (Number.isFinite(video.duration) && video.duration > 0) {
-        video.currentTime = Math.min(resumeAt, Math.max(0, video.duration - 0.05));
-      }
-      if (shouldResume) await video.play().catch(() => {});
-      onReady();
+      await resumeCachedVideo(video, url, request, isCurrent, timestampScale, onReady);
       return;
     }
     if (state === "missing") return;
@@ -323,11 +327,12 @@ function updateCameraControlRetry() {
   const retryAllowed = !locked && cameraControlState?.retryAllowed === true;
   const retryExhausted = cameraControlState?.circuitOpen === true && !locked && !retryAllowed;
   cameraControlRetry.disabled = !retryAllowed;
-  cameraControlRetry.innerHTML = locked
-    ? '<span class="nf" aria-hidden="true"></span> Retry disabled after Ret=205'
-    : retryExhausted
-      ? '<span class="nf" aria-hidden="true">󰌾</span> Retry disabled for this run'
-      : '<span class="nf" aria-hidden="true">󰑓</span> Retry camera controls';
+  cameraControlRetry.innerHTML = '<span class="nf" aria-hidden="true">󰑓</span> Retry camera controls';
+  if (locked) {
+    cameraControlRetry.innerHTML = '<span class="nf" aria-hidden="true"></span> Retry disabled after Ret=205';
+  } else if (retryExhausted) {
+    cameraControlRetry.innerHTML = '<span class="nf" aria-hidden="true">󰌾</span> Retry disabled for this run';
+  }
   if (locked) {
     cameraControlRetry.title = "This server will not retry a locked camera account. Restart GrowCam after unlocking it.";
   } else if (retryExhausted) {
@@ -378,7 +383,7 @@ function renderCameraControlUnavailable(error) {
   document.querySelector("#timelapse-storage-note").textContent = "DVRIP access required";
 
   const note = document.querySelector("#camera-control-note");
-  const detail = String(cameraControlState.message || errorMessage(error)).replace(/[.\s]+$/, "");
+  const detail = String(cameraControlState.message || errorMessage(error)).trimEnd().replace(/\.$/, "");
   let nextStep = "Automatic DVRIP attempts are paused. Use the explicit retry button when you want to try once more.";
   if (cameraControlState.locked) {
     nextStep = "This server will not attempt another login after Ret=205. Unlock or reset the camera, then restart GrowCam.";
@@ -615,31 +620,40 @@ async function toggleLiveAudio() {
   }
 }
 
+async function loadTabData(name) {
+  if (name === "rewind" && !historyLoaded) await loadHistory();
+  if (name === "timelapse" && !timelapseLoaded) await loadTimelapse();
+  if (name === "files" && !filesLoaded) await loadFiles();
+  if (name === "settings") await loadAppSettings();
+}
+
+function renderTabDataError(name, error) {
+  const message = errorMessage(error);
+  if (name === "rewind") document.querySelector("#history-status").textContent = message;
+  if (name === "timelapse") {
+    setStatus(document.querySelector("#timelapse-state"), "Camera unavailable", "error");
+    document.querySelector("#timelapse-file-status").textContent = message;
+  }
+  if (name === "files") document.querySelector("#files-status").textContent = message;
+  if (name === "settings") {
+    setStatus(document.querySelector("#app-settings-state"), "Settings unavailable", "error");
+    document.querySelector("#app-settings-status").textContent = message;
+  }
+}
+
 async function ensureTabData(name) {
   if (cameraControlTabs.has(name) && !cameraControlAvailable) {
     renderProtectedTabUnavailable(name);
     return;
   }
   try {
-    if (name === "rewind" && !historyLoaded) await loadHistory();
-    if (name === "timelapse" && !timelapseLoaded) await loadTimelapse();
-    if (name === "files" && !filesLoaded) await loadFiles();
-    if (name === "settings") await loadAppSettings();
+    await loadTabData(name);
   } catch (error) {
     if (cameraControlTabs.has(name) && cameraControlStateFromError(error)) {
       renderCameraControlUnavailable(error);
       return;
     }
-    if (name === "rewind") document.querySelector("#history-status").textContent = errorMessage(error);
-    if (name === "timelapse") {
-      setStatus(document.querySelector("#timelapse-state"), "Camera unavailable", "error");
-      document.querySelector("#timelapse-file-status").textContent = errorMessage(error);
-    }
-    if (name === "files") document.querySelector("#files-status").textContent = errorMessage(error);
-    if (name === "settings") {
-      setStatus(document.querySelector("#app-settings-state"), "Settings unavailable", "error");
-      document.querySelector("#app-settings-status").textContent = errorMessage(error);
-    }
+    renderTabDataError(name, error);
   }
 }
 
@@ -830,9 +844,14 @@ function renderHistory(payload) {
     const bounds = recordingBounds(recording);
     return bounds.end <= bounds.start;
   }).length;
-  status.textContent = recordings.length
-    ? `${recordings.length - unplayable} playable block${recordings.length - unplayable === 1 ? "" : "s"}${unplayable ? ` · ${unplayable} zero-duration camera artifact${unplayable === 1 ? "" : "s"} skipped` : ""} · choose a time.`
-    : "No recordings found for this day.";
+  const playable = recordings.length - unplayable;
+  const playableLabel = `${playable} playable block${playable === 1 ? "" : "s"}`;
+  const skippedLabel = unplayable === 0
+    ? ""
+    : ` · ${unplayable} zero-duration camera artifact${unplayable === 1 ? "" : "s"} skipped`;
+  status.textContent = recordings.length === 0
+    ? "No recordings found for this day."
+    : `${playableLabel}${skippedLabel} · choose a time.`;
   document.querySelector("#history-position").textContent = `— / ${recordings.length}`;
   document.querySelector("#history-previous").disabled = true;
   document.querySelector("#history-next").disabled = true;
@@ -1003,7 +1022,10 @@ function fillTimelapseForm(config) {
 function renderTimelapse(payload, forceFormRefresh) {
   const config = payload.config;
   const state = document.querySelector("#timelapse-state");
-  setStatus(state, config.active ? "Capturing" : config.enabled ? "Scheduled" : "Disabled", config.enabled ? "violet-status" : "pending");
+  let stateLabel = "Disabled";
+  if (config.active) stateLabel = "Capturing";
+  else if (config.enabled) stateLabel = "Scheduled";
+  setStatus(state, stateLabel, config.enabled ? "violet-status" : "pending");
   const progress = document.querySelector("#timelapse-progress");
   progress.value = config.progressPercent;
   progress.textContent = `${config.progressPercent}%`;
@@ -1249,7 +1271,11 @@ async function applySettings() {
   try {
     const response = await fetch("/api/timelapse", { method: "POST", headers: { "Content-Type": "application/json", "X-GrowCam-Request": "1" }, body: JSON.stringify({ expectedRevision: timelapseData.config.revision, config: pendingConfig }) });
     const payload = await response.json();
-    if (!response.ok) throw new Error(`${payload.error || `Request failed (${response.status})`}${payload.rollbackVerified === true ? " The previous schedule was restored." : ""}`);
+    if (!response.ok) {
+      const requestError = payload.error || `Request failed (${response.status})`;
+      const rollbackNote = payload.rollbackVerified === true ? " The previous schedule was restored." : "";
+      throw new Error(`${requestError}${rollbackNote}`);
+    }
     confirmDialog.close();
     pendingConfig = null;
     formIsDirty = false;
@@ -1284,7 +1310,7 @@ async function buildPreview(recording) {
   save.hidden = false;
   const startedAt = performance.now();
   let playbackStarted = false;
-  let cacheState = "missing";
+  let cacheState;
   try {
     cacheState = await previewCacheState(url, request.signal);
     await loadVideoStream(previewVideo, url, request.signal);
@@ -1493,9 +1519,11 @@ document.querySelector("#timelapse-speed").addEventListener("change", (event) =>
 previewVideo.addEventListener("ended", () => {
   if (!currentPreviewRecording) return;
   const decodedFrames = previewVideo.getVideoPlaybackQuality?.().totalVideoFrames;
-  const frameCount = Number.isFinite(decodedFrames) && decodedFrames > 0
-    ? `${decodedFrames.toLocaleString()} captured frame${decodedFrames === 1 ? "" : "s"} · `
-    : "";
+  let frameCount = "";
+  if (Number.isFinite(decodedFrames) && decodedFrames > 0) {
+    const frameLabel = decodedFrames === 1 ? "frame" : "frames";
+    frameCount = `${decodedFrames.toLocaleString()} captured ${frameLabel} · `;
+  }
   document.querySelector("#preview-status").textContent = `${frameCount}${formatDuration(previewVideo.duration)} compressed video covering ${displayDate(currentPreviewRecording.beginTime)} → ${displayDate(currentPreviewRecording.endTime)} · complete preview cached locally.`;
 });
 
