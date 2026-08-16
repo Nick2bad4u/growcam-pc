@@ -205,7 +205,7 @@ def test_media_byte_range_supports_browser_seek_requests(
     assert _byte_range(header, 10) == expected
 
 
-@pytest.mark.parametrize("header", ["items=0-1", "bytes=", "bytes=10-", "bytes=4-2", "bytes=0-1,4-5"])
+@pytest.mark.parametrize("header", ["items=0-1", "bytes=", "bytes=-0", "bytes=10-", "bytes=4-2", "bytes=0-1,4-5"])
 def test_media_byte_range_rejects_invalid_or_unsatisfiable_requests(header: str) -> None:
     with pytest.raises(WebRequestError) as raised:
         _ = _byte_range(header, 10)

@@ -151,6 +151,61 @@ def test_recordings_passes_explicit_timelapse_event(monkeypatch: pytest.MonkeyPa
     assert requests[0]["OPFileQuery"]["Event"] == "E"
 
 
+def test_recordings_deduplicate_rows_from_one_camera_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    camera = DVRIPClient("192.0.2.1")
+    recording = {
+        "FileName": "/idea0/2026-08-01/001/10.00.00-10.05.00[R][0].h264",
+        "BeginTime": "2026-08-01 10:00:00",
+    }
+
+    def fake_request(_message_id: int, _body: dict[str, Any], **_kwargs: object) -> dict[str, Any]:
+        return {"Ret": 110, "OPFileQuery": [recording, recording, "invalid"]}
+
+    monkeypatch.setattr(camera, "_request", fake_request)
+
+    assert camera.recordings(start=datetime(2026, 8, 1), end=datetime(2026, 8, 2)) == [recording]
+
+
+def test_recordings_treat_non_list_camera_payload_as_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    camera = DVRIPClient("192.0.2.1")
+
+    def fake_request(_message_id: int, _body: dict[str, Any], **_kwargs: object) -> dict[str, Any]:
+        return {"Ret": 110, "OPFileQuery": {}}
+
+    monkeypatch.setattr(camera, "_request", fake_request)
+
+    assert camera.recordings(start=datetime(2026, 8, 1), end=datetime(2026, 8, 2)) == []
+
+
+def test_system_info_returns_a_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
+    camera = DVRIPClient("192.0.2.1")
+
+    def fake_named_request(_message_id: int, _name: str) -> dict[str, Any]:
+        return {"SystemInfo": {"DeviceModel": "C4"}}
+
+    monkeypatch.setattr(camera, "_named_request", fake_named_request)
+
+    assert camera.system_info("SystemInfo") == {"DeviceModel": "C4"}
+
+
+def test_disconnected_operations_fail_before_opening_media_sockets(tmp_path: Path) -> None:
+    camera = DVRIPClient("192.0.2.1")
+    filename = "/idea0/2026-08-01/001/10.00.00-10.05.00[R][0].h264"
+    output = BytesIO()
+
+    with pytest.raises(DVRIPError, match="Client is not connected"):
+        _ = camera.stream_download(filename, output)
+
+    with pytest.raises(DVRIPError, match="Client is not connected"):
+        _ = camera.playback_snapshot(filename, tmp_path / "snapshot.xm", expected_bytes=1)
+
+    with pytest.raises(DVRIPError, match="Client is not connected"):
+        _ = camera.system_info("SystemInfo")
+
+    with pytest.raises(DVRIPError, match="Client is not connected"):
+        _ = camera._receive()
+
+
 def test_config_set_uses_config_write_command(monkeypatch: pytest.MonkeyPatch) -> None:
     camera = DVRIPClient("192.0.2.1")
     observed: list[tuple[int, dict[str, Any]]] = []

@@ -24,6 +24,17 @@ def _audio_frame(payload: bytes) -> bytes:
     return b"\x00\x00\x01\xfa" + bytes((0x0E, 2)) + len(payload).to_bytes(2, "little") + payload
 
 
+def test_finish_discards_an_incomplete_frame_header() -> None:
+    video = io.BytesIO()
+    demuxer = XMRecordingDemuxer(video)
+
+    _ = demuxer.write(b"\x00\x00\x01\xfc")
+    stats = demuxer.finish()
+
+    assert stats.video_bytes == 0
+    assert video.getvalue() == b""
+
+
 def test_interleaved_stream_is_demultiplexed_across_arbitrary_chunks() -> None:
     video_payload = b"\x00\x00\x00\x01\x40\x01video"
     continuation = b"\x00\x00\x00\x01\x02\x01more"

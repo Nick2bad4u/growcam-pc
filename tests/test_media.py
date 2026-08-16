@@ -272,6 +272,36 @@ def test_fragmented_preview_transcoder_uses_low_latency_pipes(monkeypatch: pytes
     assert observed_command[observed_command.index("-tune") + 1] == "zerolatency"
 
 
+def test_fragmented_preview_transcoders_reject_invalid_geometry() -> None:
+    with pytest.raises(ValueError, match="frames_per_second"):
+        _ = media.start_fragmented_preview_transcode(frames_per_second=0)
+
+    with pytest.raises(ValueError, match="positive even"):
+        _ = media.start_fragmented_preview_transcode(frames_per_second=25, width=1279)
+
+    with pytest.raises(ValueError, match="frames_per_second"):
+        _ = media.start_xm_fragmented_preview_transcode(frames_per_second=0, video_port=41001, audio_port=41002)
+
+    with pytest.raises(ValueError, match="positive even"):
+        _ = media.start_xm_fragmented_preview_transcode(
+            frames_per_second=25,
+            width=1279,
+            video_port=41001,
+            audio_port=41002,
+        )
+
+
+def test_xm_preview_builder_rejects_invalid_frame_rate(tmp_path: Path) -> None:
+    def source(_output: BinaryIO) -> int:
+        return 0
+
+    def consume(_chunk: bytes) -> None:
+        return None
+
+    with pytest.raises(ValueError, match="frames_per_second"):
+        _ = media.build_xm_fragmented_preview(source, tmp_path / "preview.mp4", consume, frames_per_second=0)
+
+
 def test_xm_preview_transcoder_accepts_separate_video_and_audio_inputs(monkeypatch: pytest.MonkeyPatch) -> None:
     observed_command: list[str] = []
     process = cast("subprocess.Popen[bytes]", object())
@@ -484,7 +514,14 @@ def test_fragmented_preview_aligns_video_timestamps_to_recovered_audio(
 
 def test_preview_stream_durations_reads_ffprobe_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
     observed_command: list[str] = []
-    output = b'{"streams":[{"codec_type":"video","duration":"112.0"},{"codec_type":"audio","duration":"119.5"}]}'
+    output = (
+        b'{"streams":[42,{"codec_type":7,"duration":"1"},'
+        b'{"codec_type":"video","duration":"bad"},'
+        b'{"codec_type":"video","duration":"112.0"},'
+        b'{"codec_type":"video","duration":"999"},'
+        b'{"codec_type":"data","duration":"0"},'
+        b'{"codec_type":"audio","duration":"119.5"}]}'
+    )
 
     def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
         observed_command.extend(command)
