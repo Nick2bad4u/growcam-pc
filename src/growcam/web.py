@@ -73,6 +73,10 @@ _TIMELAPSE_CACHED_FRAMES_PER_SECOND = 25.0
 _WINDOWS_ADDRESS_IN_USE = 10048
 _LOCKED_LOGIN_RETURN_CODE = 205
 _ACCOUNT_REJECTION_RETURN_CODES = frozenset({106, 203, 204, 205, 206, 207, 430})
+_API_SETTINGS = "/api/settings"
+_API_TIMELAPSE = "/api/timelapse"
+_VIDEO_MP4 = "video/mp4"
+_INVALID_BYTE_RANGE = "Media byte range is invalid"
 _CONTENT_SECURITY_POLICY = (
     "default-src 'self'; base-uri 'none'; connect-src 'self'; form-action 'self'; "
     "frame-ancestors 'none'; img-src 'self' blob:; media-src 'self' blob:; object-src 'none'; "
@@ -461,7 +465,7 @@ class GrowCamHandler(BaseHTTPRequestHandler):
                 self._json(self._camera_info())
             elif request.path == "/api/camera-control":
                 self._json(cast("GrowCamHTTPServer", self.server).camera_controls.snapshot().to_api())
-            elif request.path == "/api/settings":
+            elif request.path == _API_SETTINGS:
                 self._json(self._settings_state())
             elif request.path == "/api/recordings":
                 query = parse_qs(request.query)
@@ -487,7 +491,7 @@ class GrowCamHandler(BaseHTTPRequestHandler):
                     video_codec=video_codec,
                     cache_only=cache_only,
                 )
-            elif request.path == "/api/timelapse":
+            elif request.path == _API_TIMELAPSE:
                 self._json(self._timelapse_state())
             elif request.path == "/api/timelapse/preview":
                 query = parse_qs(request.query)
@@ -530,8 +534,8 @@ class GrowCamHandler(BaseHTTPRequestHandler):
         """Apply one guarded local configuration update."""
         request = urlparse(self.path)
         if request.path not in {
-            "/api/timelapse",
-            "/api/settings",
+            _API_TIMELAPSE,
+            _API_SETTINGS,
             "/api/cache/clear",
             "/api/camera-control/retry",
         }:
@@ -539,9 +543,9 @@ class GrowCamHandler(BaseHTTPRequestHandler):
             return
         try:
             payload = self._read_json_request()
-            if request.path == "/api/timelapse":
+            if request.path == _API_TIMELAPSE:
                 self._apply_timelapse_settings(payload)
-            elif request.path == "/api/settings":
+            elif request.path == _API_SETTINGS:
                 self._apply_app_settings(payload)
             elif request.path == "/api/camera-control/retry":
                 self._retry_camera_controls(payload)
@@ -851,7 +855,7 @@ class GrowCamHandler(BaseHTTPRequestHandler):
             return
         self._send_file(
             preview,
-            content_type="video/mp4",
+            content_type=_VIDEO_MP4,
             disposition=disposition,
             cache_status="HIT" if cache_hit else "MISS",
         )
@@ -912,7 +916,7 @@ class GrowCamHandler(BaseHTTPRequestHandler):
             return
         self._send_file(
             preview,
-            content_type="video/mp4",
+            content_type=_VIDEO_MP4,
             disposition=disposition,
             cache_status="HIT" if cache_hit else "MISS",
         )
@@ -988,7 +992,7 @@ class GrowCamHandler(BaseHTTPRequestHandler):
         video_codec: str = "h264",
     ) -> None:
         self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", "video/mp4")
+        self.send_header("Content-Type", _VIDEO_MP4)
         self.send_header("Content-Disposition", disposition)
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-GrowCam-Preview-Cache", "MISS")
@@ -1028,7 +1032,7 @@ class GrowCamHandler(BaseHTTPRequestHandler):
         if preview is not None:
             self._send_file(
                 preview,
-                content_type="video/mp4",
+                content_type=_VIDEO_MP4,
                 disposition=disposition,
                 cache_status="HIT",
             )
@@ -1096,7 +1100,7 @@ class GrowCamHandler(BaseHTTPRequestHandler):
     def _read_json_request(self) -> dict[str, object]:  # noqa: C901 - defensive HTTP boundary validation.
         if self.headers.get("X-GrowCam-Request") != "1":
             raise WebRequestError(HTTPStatus.FORBIDDEN, "Missing local request confirmation header")
-        if not self.headers.get_content_type() == "application/json":
+        if self.headers.get_content_type() != "application/json":
             raise WebRequestError(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "Request body must be application/json")
         origin = self.headers.get("Origin")
         port = cast("tuple[str, int]", self.server.server_address)[1]
@@ -1423,24 +1427,24 @@ def _byte_range(header: str | None, file_size: int) -> tuple[int, int] | None:
         raise WebRequestError(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE, "Media file is empty")
     unit, separator, value = header.partition("=")
     if separator != "=" or unit.strip().casefold() != "bytes" or "," in value:
-        raise WebRequestError(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE, "Media byte range is invalid")
+        raise WebRequestError(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE, _INVALID_BYTE_RANGE)
     start_text, dash, end_text = value.strip().partition("-")
     if dash != "-" or (not start_text and not end_text):
-        raise WebRequestError(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE, "Media byte range is invalid")
+        raise WebRequestError(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE, _INVALID_BYTE_RANGE)
     try:
         start_value = int(start_text) if start_text else None
         end_value = int(end_text) if end_text else None
     except ValueError as error:
         raise WebRequestError(
             HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE,
-            "Media byte range is invalid",
+            _INVALID_BYTE_RANGE,
         ) from error
     if start_value is not None:
         start = start_value
         end = file_size - 1 if end_value is None else end_value
     else:
         if end_value is None or end_value <= 0:
-            raise WebRequestError(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE, "Media byte range is invalid")
+            raise WebRequestError(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE, _INVALID_BYTE_RANGE)
         start = max(0, file_size - end_value)
         end = file_size - 1
     if start < 0 or start >= file_size or end < start:

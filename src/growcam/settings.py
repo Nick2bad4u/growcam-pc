@@ -22,6 +22,7 @@ _MINIMUM_CACHE_ENTRIES = 1
 _MAXIMUM_CACHE_ENTRIES = 512
 _ALLOWED_REWIND_SECONDS = frozenset({60, 120, 300, 600})
 _ALLOWED_PREVIEW_VIDEO_CODECS = frozenset({"auto", "h264", "hevc"})
+_SETTINGS_FILENAME = "settings.json"
 _SETTING_KEYS = frozenset(
     {
         "cacheMaxBytes",
@@ -197,12 +198,12 @@ def settings_path(
     if platform_name == "win32":
         local_app_data = values.get("LOCALAPPDATA")
         root = Path(local_app_data) if local_app_data else user_home / "AppData" / "Local"
-        return root / "GrowCam" / "settings.json"
+        return root / "GrowCam" / _SETTINGS_FILENAME
     if platform_name == "darwin":
-        return user_home / "Library" / "Application Support" / "GrowCam" / "settings.json"
+        return user_home / "Library" / "Application Support" / "GrowCam" / _SETTINGS_FILENAME
     xdg_config_home = values.get("XDG_CONFIG_HOME")
     root = Path(xdg_config_home) if xdg_config_home else user_home / ".config"
-    return root / "growcam" / "settings.json"
+    return root / "growcam" / _SETTINGS_FILENAME
 
 
 def _required_integer(values: Mapping[str, object], key: str) -> int:

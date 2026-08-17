@@ -39,6 +39,9 @@ _DOWNLOAD_DATA_MESSAGE = 1426
 _PLAYBACK_DATA_MESSAGE = 1422
 _PLAYBACK_EOF_MESSAGE = 1423
 _PLAYBACK_IDLE_TIMEOUT = 1.0
+_ABSOLUTE_CAMERA_PATH_ERROR = "Camera filename must be an absolute DVRIP path"
+_NOT_CONNECTED_ERROR = "Client is not connected"
+JsonObject = dict[str, Any]
 
 
 class DVRIPError(RuntimeError):
@@ -180,7 +183,7 @@ class DVRIPClient:
         response = self._named_request(1020, name)
         value = response.get(name)
         if isinstance(value, dict):
-            return cast("dict[str, Any]", value)
+            return cast("JsonObject", value)
         if isinstance(value, list):
             return cast("list[Any]", cast("object", value))
         return {}
@@ -200,6 +203,47 @@ class DVRIPClient:
         response = self._named_request(1360, name)
         return response.get(name)
 
+    def _recording_page(
+        self,
+        *,
+        start: datetime,
+        end: datetime,
+        channel: int,
+        file_type: str,
+        event: str,
+    ) -> tuple[JsonObject, list[JsonObject]]:
+        name = "OPFileQuery"
+        response = self._request(
+            1440,
+            {
+                "Name": name,
+                name: {
+                    "BeginTime": _camera_time(start),
+                    "EndTime": _camera_time(end),
+                    "Channel": channel,
+                    "Event": event,
+                    "Type": file_type,
+                },
+            },
+        )
+        self._require_ok(name, response, allowed={100, 110, 111, 119, 515})
+        raw_files = response.get(name)
+        if not isinstance(raw_files, list):
+            return response, []
+        page = [cast("JsonObject", item) for item in cast("list[object]", raw_files) if isinstance(item, dict)]
+        return response, page
+
+    @staticmethod
+    def _append_unique_recordings(page: list[JsonObject], results: list[JsonObject], seen: set[str]) -> int:
+        added = 0
+        for item in page:
+            filename = str(item.get("FileName", ""))
+            if filename and filename not in seen:
+                seen.add(filename)
+                results.append(item)
+                added += 1
+        return added
+
     def recordings(
         self,
         *,
@@ -214,38 +258,18 @@ class DVRIPClient:
             raise ValueError("file_type must be 'h264' or 'jpg'")
         if event not in {"*", "A", "E", "H", "M", "R"}:
             raise ValueError("event must be one of '*', 'A', 'E', 'H', 'M', or 'R'")
-        name = "OPFileQuery"
-        results: list[dict[str, Any]] = []
+        results: list[JsonObject] = []
         seen: set[str] = set()
         cursor = start
         for _page in range(4096):
-            response = self._request(
-                1440,
-                {
-                    "Name": name,
-                    name: {
-                        "BeginTime": _camera_time(cursor),
-                        "EndTime": _camera_time(end),
-                        "Channel": channel,
-                        "Event": event,
-                        "Type": file_type,
-                    },
-                },
+            response, page = self._recording_page(
+                start=cursor,
+                end=end,
+                channel=channel,
+                file_type=file_type,
+                event=event,
             )
-            self._require_ok(name, response, allowed={100, 110, 111, 119, 515})
-            raw_files = response.get(name)
-            page: list[dict[str, Any]] = []
-            if isinstance(raw_files, list):
-                page.extend(
-                    cast("dict[str, Any]", item) for item in cast("list[object]", raw_files) if isinstance(item, dict)
-                )
-            added = 0
-            for item in page:
-                filename = str(item.get("FileName", ""))
-                if filename and filename not in seen:
-                    seen.add(filename)
-                    results.append(item)
-                    added += 1
+            added = self._append_unique_recordings(page, results, seen)
             status = int(response.get("Ret", 0))
             if status in {110, 119} or not page:
                 break
@@ -267,7 +291,7 @@ class DVRIPClient:
     ) -> int:
         """Download one camera recording to a new local file."""
         if not filename.startswith("/"):
-            raise ValueError("Camera filename must be an absolute DVRIP path")
+            raise ValueError(_ABSOLUTE_CAMERA_PATH_ERROR)
         if destination.exists():
             raise FileExistsError(f"Destination already exists: {destination}")
         partial = destination.with_name(destination.name + ".part")
@@ -288,7 +312,7 @@ class DVRIPClient:
     def stream_download(self, filename: str, output: BinaryIO) -> int:
         """Write one complete camera recording directly to an open binary stream."""
         if not filename.startswith("/"):
-            raise ValueError("Camera filename must be an absolute DVRIP path")
+            raise ValueError(_ABSOLUTE_CAMERA_PATH_ERROR)
         start_time, end_time = _recording_times(filename)
         playback = {
             "Action": "DownloadStart",
@@ -314,7 +338,7 @@ class DVRIPClient:
     def _stream_download_request(self, playback: Mapping[str, object], output: BinaryIO) -> int:
         """Run one OPPlayBack download request and stream its media payload."""
         if self._socket is None:
-            raise DVRIPError("Client is not connected")
+            raise DVRIPError(_NOT_CONNECTED_ERROR)
         body = {
             "Name": "OPPlayBack",
             "OPPlayBack": playback,
@@ -378,7 +402,7 @@ class DVRIPClient:
     ) -> int:
         """Capture the currently playable portion of a recording to a new file."""
         if not filename.startswith("/"):
-            raise ValueError("Camera filename must be an absolute DVRIP path")
+            raise ValueError(_ABSOLUTE_CAMERA_PATH_ERROR)
         if expected_bytes <= 0:
             raise ValueError("expected_bytes must be greater than zero")
         start_time, end_time = _recording_times(filename)
@@ -500,7 +524,7 @@ class DVRIPClient:
         if maximum_bytes <= 0:
             raise ValueError("Playback snapshot safety limit must be greater than zero")
         if self._socket is None:
-            raise DVRIPError("Client is not connected")
+            raise DVRIPError(_NOT_CONNECTED_ERROR)
 
         claim_playback = {**playback, "Action": "Claim"}
         start_playback = {**playback, "Action": "Start"}
@@ -653,7 +677,7 @@ class DVRIPClient:
         include_session: bool = True,
     ) -> dict[str, Any]:
         if self._socket is None:
-            raise DVRIPError("Client is not connected")
+            raise DVRIPError(_NOT_CONNECTED_ERROR)
         if include_session:
             body = {**body, "SessionID": f"0x{self._session_id:08X}"}
         payload = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\x0a\x00"
@@ -673,7 +697,7 @@ class DVRIPClient:
 
     def _receive(self) -> dict[str, Any]:
         if self._socket is None:
-            raise DVRIPError("Client is not connected")
+            raise DVRIPError(_NOT_CONNECTED_ERROR)
         message_id, raw, _end = self._receive_packet(self._socket)
         return _decode_json(raw, message_id)
 
@@ -770,4 +794,4 @@ def _decode_json(raw: bytes, message_id: int) -> dict[str, Any]:
         raise DVRIPError(f"Invalid JSON in DVRIP response {message_id}") from error
     if not isinstance(decoded, dict):
         raise DVRIPError(f"Unexpected DVRIP response type for {message_id}")
-    return cast("dict[str, Any]", decoded)
+    return cast("JsonObject", decoded)
