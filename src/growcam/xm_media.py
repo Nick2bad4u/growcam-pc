@@ -100,28 +100,32 @@ class XMRecordingDemuxer:
             if located is None:
                 self._handle_unmarked_buffer(final=final)
                 return
-            marker_offset, marker = located
-            if self._mode == "detect":
-                self._mode = "framed"
-            if marker_offset:
-                del self._buffer[:marker_offset]
-            frame = _frame_layout(self._buffer, marker)
-            if frame is None:
-                if final:
-                    del self._buffer[:1]
-                    continue
+            if not self._consume_located_frame(*located, final=final):
                 return
-            header_bytes, payload_bytes, target = frame
-            frame_bytes = header_bytes + payload_bytes
-            self._capture_frame_rate(marker)
-            if len(self._buffer) < frame_bytes:
-                if final:
-                    del self._buffer[:1]
-                    continue
-                return
-            payload = bytes(self._buffer[header_bytes:frame_bytes])
-            del self._buffer[:frame_bytes]
-            self._emit_payload(marker, target, payload)
+
+    def _consume_located_frame(self, marker_offset: int, marker: bytes, *, final: bool) -> bool:
+        """Consume one complete framed payload and report whether scanning can continue."""
+        if self._mode == "detect":
+            self._mode = "framed"
+        if marker_offset:
+            del self._buffer[:marker_offset]
+        frame = _frame_layout(self._buffer, marker)
+        if frame is None:
+            return self._discard_incomplete_frame(final=final)
+        header_bytes, payload_bytes, target = frame
+        frame_bytes = header_bytes + payload_bytes
+        self._capture_frame_rate(marker)
+        if len(self._buffer) < frame_bytes:
+            return self._discard_incomplete_frame(final=final)
+        payload = bytes(self._buffer[header_bytes:frame_bytes])
+        del self._buffer[:frame_bytes]
+        self._emit_payload(marker, target, payload)
+        return True
+
+    def _discard_incomplete_frame(self, *, final: bool) -> bool:
+        if final:
+            del self._buffer[:1]
+        return final
 
     def _capture_frame_rate(self, marker: bytes) -> None:
         if marker != _VIDEO_FRAME or self._frames_per_second is not None:

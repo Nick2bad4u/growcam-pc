@@ -221,16 +221,19 @@ def test_streaming_preview_disconnect_is_a_cancellation() -> None:
         def flush(self) -> None:
             pytest.fail("flush should not follow a failed write")
 
+    output = cast("BufferedIOBase", DisconnectedOutput())
     with pytest.raises(web.PreviewClientDisconnectedError):
-        _write_preview_chunk(cast("BufferedIOBase", DisconnectedOutput()), b"fragment")
+        _write_preview_chunk(output, b"fragment")
 
 
 def test_duplicate_server_bind_preserves_the_original_socket_error() -> None:
     first = GrowCamHTTPServer(("127.0.0.1", 0), WebConfig("192.0.2.1"))
     port = first.server_address[1]
+    address = ("127.0.0.1", port)
+    config = WebConfig("192.0.2.1")
     try:
         with pytest.raises(OSError, match=r"(?:Address already in use|socket address)") as raised:
-            _ = GrowCamHTTPServer(("127.0.0.1", port), WebConfig("192.0.2.1"))
+            _ = GrowCamHTTPServer(address, config)
         assert raised.value.errno == errno.EADDRINUSE or getattr(raised.value, "winerror", None) == 10048
     finally:
         first.server_close()
@@ -340,9 +343,10 @@ def test_address_in_use_is_reported_consistently(monkeypatch: pytest.MonkeyPatch
         raise OSError(errno.EADDRINUSE, "Address already in use")
 
     monkeypatch.setattr(web, "GrowCamHTTPServer", fail_to_bind)
+    config = WebConfig("192.0.2.1")
 
     with pytest.raises(OSError, match="Local port 8876 is already in use"):
-        serve(WebConfig("192.0.2.1"), "127.0.0.1", 8876)
+        serve(config, "127.0.0.1", 8876)
 
 
 def test_static_responses_have_browser_security_headers(

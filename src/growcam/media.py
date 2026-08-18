@@ -31,6 +31,10 @@ _PREVIEW_AUDIO_QUEUE_BYTES = 16 * 1024**2
 _PREVIEW_VIDEO_CODECS = frozenset({"h264", "hevc"})
 _XM_FRAME_RATE_DETECTION_TIMEOUT_SECONDS = 10
 _MINIMUM_TIMELINE_SCALE_DELTA = 0.001
+_PIPE_OUTPUT = "pipe:1"
+_GENERATE_TIMESTAMPS = "+genpts"
+_INVALID_FRAME_RATE = "frames_per_second must be greater than zero"
+_INVALID_PREVIEW_WIDTH = "Preview width must be a positive even number"
 
 
 class MediaError(RuntimeError):
@@ -167,7 +171,7 @@ def snapshot(host: str, username: str = "admin", password: str = "") -> bytes:
         "image2pipe",
         "-vcodec",
         "mjpeg",
-        "pipe:1",
+        _PIPE_OUTPUT,
     ]
     try:
         result = subprocess.run(
@@ -213,7 +217,7 @@ def start_mjpeg(  # noqa: PLR0913 - explicit camera and conversion options keep 
         "mpjpeg",
         "-boundary_tag",
         "growcam",
-        "pipe:1",
+        _PIPE_OUTPUT,
     ]
     return subprocess.Popen(
         command,
@@ -257,7 +261,7 @@ def start_live_audio(
         "1",
         "-f",
         "mp3",
-        "pipe:1",
+        _PIPE_OUTPUT,
     ]
     return subprocess.Popen(
         command,
@@ -324,7 +328,7 @@ def remux_recording(
     if destination.exists():
         raise FileExistsError(f"Destination already exists: {destination}")
     if frames_per_second <= 0:
-        raise ValueError("frames_per_second must be greater than zero")
+        raise ValueError(_INVALID_FRAME_RATE)
     destination.parent.mkdir(parents=True, exist_ok=True)
     partial = destination.with_name(destination.name + ".part.mkv")
     if partial.exists():
@@ -335,7 +339,7 @@ def remux_recording(
         "-loglevel",
         "warning",
         "-fflags",
-        "+genpts",
+        _GENERATE_TIMESTAMPS,
         "-r",
         str(frames_per_second),
         "-f",
@@ -371,9 +375,9 @@ def transcode_timelapse_preview(
     if destination.exists():
         raise FileExistsError(f"Destination already exists: {destination}")
     if frames_per_second <= 0:
-        raise ValueError("frames_per_second must be greater than zero")
+        raise ValueError(_INVALID_FRAME_RATE)
     if width <= 0 or width % 2:
-        raise ValueError("Preview width must be a positive even number")
+        raise ValueError(_INVALID_PREVIEW_WIDTH)
     destination.parent.mkdir(parents=True, exist_ok=True)
     partial = destination.with_name(destination.stem + ".part.mp4")
     if partial.exists():
@@ -384,7 +388,7 @@ def transcode_timelapse_preview(
         "-loglevel",
         "warning",
         "-fflags",
-        "+genpts",
+        _GENERATE_TIMESTAMPS,
         "-r",
         str(frames_per_second),
         "-f",
@@ -423,16 +427,16 @@ def start_fragmented_preview_transcode(
 ) -> subprocess.Popen[bytes]:
     """Start a low-latency HEVC-to-fragmented-MP4 transcoder on binary pipes."""
     if frames_per_second <= 0:
-        raise ValueError("frames_per_second must be greater than zero")
+        raise ValueError(_INVALID_FRAME_RATE)
     if width <= 0 or width % 2:
-        raise ValueError("Preview width must be a positive even number")
+        raise ValueError(_INVALID_PREVIEW_WIDTH)
     command = [
         _ffmpeg(),
         "-hide_banner",
         "-loglevel",
         "error",
         "-fflags",
-        "+genpts",
+        _GENERATE_TIMESTAMPS,
         "-r",
         str(frames_per_second),
         "-f",
@@ -472,7 +476,7 @@ def start_fragmented_preview_transcode(
         "1",
         "-f",
         "mp4",
-        "pipe:1",
+        _PIPE_OUTPUT,
     ]
     return subprocess.Popen(
         command,
@@ -492,9 +496,9 @@ def start_xm_fragmented_preview_transcode(
 ) -> subprocess.Popen[bytes]:
     """Start a low-latency XM HEVC/G.711A-to-fragmented-MP4 transcoder."""
     if frames_per_second <= 0:
-        raise ValueError("frames_per_second must be greater than zero")
+        raise ValueError(_INVALID_FRAME_RATE)
     if width <= 0 or width % 2:
-        raise ValueError("Preview width must be a positive even number")
+        raise ValueError(_INVALID_PREVIEW_WIDTH)
     if not 0 < video_port <= _MAXIMUM_TCP_PORT or not 0 < audio_port <= _MAXIMUM_TCP_PORT:
         raise ValueError("Preview media ports must be valid TCP ports")
     if video_codec not in _PREVIEW_VIDEO_CODECS:
@@ -511,7 +515,7 @@ def start_xm_fragmented_preview_transcode(
         "-loglevel",
         "error",
         "-fflags",
-        "+genpts",
+        _GENERATE_TIMESTAMPS,
         # FFmpeg opens inputs in command-line order. The headerless A-law input
         # becomes ready after a few bytes; opening it first prevents HEVC stream
         # analysis from delaying the audio connection until camera EOF.
@@ -598,7 +602,7 @@ def start_xm_fragmented_preview_transcode(
             "1",
             "-f",
             "mp4",
-            "pipe:1",
+            _PIPE_OUTPUT,
         )
     )
     return subprocess.Popen(
@@ -674,7 +678,7 @@ def build_xm_fragmented_preview(  # noqa: PLR0913 - explicit codec controls keep
 ) -> XMStreamStats:
     """Demultiplex an XM recording into a streamed, atomic MP4 cache file."""
     if frames_per_second <= 0:
-        raise ValueError("frames_per_second must be greater than zero")
+        raise ValueError(_INVALID_FRAME_RATE)
     if destination.exists():
         raise FileExistsError(f"Destination already exists: {destination}")
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -797,7 +801,7 @@ def finalize_fragmented_preview(
         if video_duration is not None and audio_duration is not None:
             video_scale *= audio_duration / video_duration
             separate_audio_input = abs(video_scale - timestamp_scale) > _MINIMUM_TIMELINE_SCALE_DELTA
-    if video_scale != 1.0:
+    if abs(video_scale - 1.0) > _MINIMUM_TIMELINE_SCALE_DELTA:
         command.extend(("-itsscale", str(video_scale)))
     command.extend(("-i", str(source)))
     if separate_audio_input:
@@ -851,22 +855,33 @@ def _preview_stream_durations(source: Path) -> tuple[float | None, float | None]
     streams_value = payload.get("streams")
     if not isinstance(streams_value, list):
         raise MediaError("FFprobe returned invalid preview stream metadata")
+    durations = _positive_stream_durations(cast("list[object]", streams_value))
+    return durations.get("video"), durations.get("audio")
+
+
+def _positive_stream_durations(streams: list[object]) -> dict[str, float]:
     durations: dict[str, float] = {}
-    for value in cast("list[object]", streams_value):
+    for value in streams:
         if not isinstance(value, dict):
             continue
         stream = cast("dict[object, object]", value)
         codec_type = stream.get("codec_type")
-        duration = stream.get("duration")
         if not isinstance(codec_type, str) or codec_type in durations:
             continue
-        try:
-            parsed_duration = float(duration) if isinstance(duration, (int, float, str)) else 0.0
-        except ValueError:
-            continue
-        if parsed_duration > 0:
+        parsed_duration = _positive_duration(stream.get("duration"))
+        if parsed_duration is not None:
             durations[codec_type] = parsed_duration
-    return durations.get("video"), durations.get("audio")
+    return durations
+
+
+def _positive_duration(value: object) -> float | None:
+    if not isinstance(value, (int, float, str)):
+        return None
+    try:
+        duration = float(value)
+    except ValueError:
+        return None
+    return duration if duration > 0 else None
 
 
 def _preview_pipes(process: subprocess.Popen[bytes]) -> tuple[BinaryIO, _ReadableBinaryPipe, BinaryIO]:

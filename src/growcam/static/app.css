@@ -44,7 +44,7 @@ a:hover { text-decoration: underline; }
 .app-tabs { position: sticky; z-index: 20; top: 10px; display: grid; width: min(900px, 100%); grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; margin: 31px auto 0; padding: 6px; border: 1px solid rgb(61 88 97 / 82%); border-radius: 16px; background: rgb(5 16 20 / 88%); box-shadow: 0 14px 42px rgb(0 0 0 / 24%); backdrop-filter: blur(16px); }
 .app-tab { gap: 9px; border: 0; border-radius: 11px; padding: 11px 16px; background: transparent; color: var(--muted); font-size: 0.84rem; font-weight: 680; }
 .app-tab .nf { color: #c3d3d8; font-size: 1rem; }
-.app-tab:hover:not(:disabled) { transform: none; background: rgb(101 231 255 / 7%); color: white; }
+.app-tab:hover:not(:disabled) { transform: none; background: #163039; color: #ffffff; }
 .app-tab[aria-selected="true"] { background: linear-gradient(135deg, rgb(101 231 255 / 18%), rgb(101 231 255 / 7%)); color: var(--cyan); box-shadow: 0 0 0 1px rgb(101 231 255 / 42%) inset, 0 8px 24px rgb(0 0 0 / 20%); }
 .app-tab[aria-selected="true"] .nf { color: var(--cyan); text-shadow: 0 0 15px rgb(101 231 255 / 48%); }
 .tab-panel { min-width: 0; margin-top: 22px; }
@@ -70,14 +70,14 @@ a:hover { text-decoration: underline; }
 .feed-label.paused .pulse { background: var(--amber); box-shadow: 0 0 13px var(--amber); }
 .viewer-bar, .player-footer { display: flex; justify-content: space-between; align-items: center; gap: 22px; padding: 13px 18px; color: var(--muted); font-size: 0.81rem; }
 .viewer-actions { display: flex; align-items: center; gap: 13px; }
-.quality-selector { display: inline-flex; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: rgb(4 14 18 / 75%); }
+.quality-selector { display: inline-flex; overflow: hidden; margin: 0; border: 1px solid var(--line); border-radius: 10px; padding: 0; background: rgb(4 14 18 / 75%); }
 .quality-selector .quality-button { min-width: 44px; border: 0; border-radius: 0; color: var(--muted); }
 .quality-selector .quality-button + .quality-button { border-left: 1px solid var(--line); }
 .quality-selector .quality-button.selected { background: rgb(101 231 255 / 16%); color: var(--cyan); box-shadow: 0 0 0 1px rgb(101 231 255 / 24%) inset; }
 #live-audio-state { color: #728a91; }
 #live-audio-state.active { color: var(--green); }
 .icon-link { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
-.camera-control-note { display: flex; align-items: center; gap: 13px; margin-top: 16px; border: 1px solid rgb(255 198 109 / 42%); border-radius: 14px; padding: 14px 16px; background: rgb(255 198 109 / 7%); color: #ffe4b8; }
+.camera-control-note { display: flex; align-items: center; gap: 13px; margin-top: 16px; border: 1px solid rgb(255 198 109 / 42%); border-radius: 14px; padding: 14px 16px; background: #2a241b; color: #ffe4b8; }
 .camera-control-note > .nf { margin-top: 2px; color: var(--amber); font-size: 1.05rem; }
 .camera-control-copy { flex: 1 1 420px; min-width: 0; }
 .camera-control-note strong { display: block; margin-bottom: 3px; font-size: 0.84rem; }
@@ -149,6 +149,7 @@ select { border: 1px solid #5c4d34; border-radius: 9px; padding: 8px 34px 8px 10
 .transport-controls { display: flex; gap: 8px; }
 .timeline-card { padding: 21px; }
 .timeline-ruler { display: flex; justify-content: space-between; margin-top: 28px; color: #71878e; font-family: ui-monospace, "Cascadia Code", monospace; font-size: 0.67rem; }
+.timeline-group { min-width: 0; margin: 0; border: 0; padding: 0; }
 .timeline-track { position: relative; height: 54px; margin: 7px 0 16px; overflow: hidden; border: 1px solid #30474e; border-radius: 9px; background: repeating-linear-gradient(90deg, transparent 0, transparent calc(25% - 1px), rgb(147 169 176 / 12%) calc(25% - 1px), rgb(147 169 176 / 12%) 25%), #071317; }
 .timeline-segment { position: absolute; top: 8px; bottom: 8px; min-width: 3px; padding: 0; border: 0; border-radius: 3px; background: linear-gradient(180deg, #ffd184, #be7b21); box-shadow: 0 0 10px rgb(255 198 109 / 24%); transition: none; }
 .timeline-segment:hover:not(:disabled) { background: #ffe2af; transform: none; }
@@ -158,7 +159,7 @@ select { border: 1px solid #5c4d34; border-radius: 9px; padding: 8px 34px 8px 10
 #history-status { min-height: 42px; font-size: 0.79rem; line-height: 1.45; }
 .segment-list { display: grid; max-height: 228px; grid-template-columns: 1fr 1fr; gap: 7px; margin: 15px 0 0; padding: 0; overflow-y: auto; list-style: none; }
 .segment-button { width: 100%; justify-content: flex-start; border-color: #30474e; padding: 8px 9px; background: #09171b; color: #d5e4e8; font-size: 0.72rem; text-align: left; }
-.segment-button:hover:not(:disabled), .segment-button.selected { border-color: var(--amber); background: rgb(255 198 109 / 11%); color: #fff0d2; transform: none; }
+.segment-button:hover:not(:disabled), .segment-button.selected { border-color: var(--amber); background: #302719; color: #fff4df; transform: none; }
 .segment-button .nf { color: var(--amber); }
 .segment-button small { margin-left: auto; color: var(--muted); }
 
@@ -252,11 +253,11 @@ tbody tr:hover { background: #14252a; }
 #cache-usage { margin: 14px 0 21px; }
 #cache-usage::-webkit-progress-value { background: linear-gradient(90deg, #328657, var(--green)); }
 #cache-usage::-moz-progress-bar { background: linear-gradient(90deg, #328657, var(--green)); }
-.cache-details { display: grid; gap: 0; margin: 0; border: 1px solid rgb(143 245 173 / 14%); border-radius: 12px; background: rgb(5 18 14 / 34%); }
-.cache-details > div { display: flex; justify-content: space-between; gap: 20px; padding: 11px 13px; border-bottom: 1px solid rgb(143 245 173 / 10%); font-size: 0.74rem; }
-.cache-details > div:last-child { border-bottom: 0; }
+.cache-details { display: grid; grid-template-columns: 1fr auto; gap: 0; margin: 0; border: 1px solid rgb(143 245 173 / 14%); border-radius: 12px; background: rgb(5 18 14 / 34%); }
+.cache-details dt, .cache-details dd { padding: 11px 13px; border-bottom: 1px solid rgb(143 245 173 / 10%); font-size: 0.74rem; }
+.cache-details dt:last-of-type, .cache-details dd:last-of-type { border-bottom: 0; }
 .cache-details dt { color: var(--muted); }
-.cache-details dd { margin: 0; color: #e8f5ec; font-weight: 650; }
+.cache-details dd { margin: 0; color: #e8f5ec; font-weight: 650; text-align: right; }
 .cache-explainer { margin: 18px 0; color: var(--muted); font-size: 0.74rem; line-height: 1.55; }
 .cache-card > button { width: 100%; }
 .cache-dialog-actions { margin-top: 25px; }

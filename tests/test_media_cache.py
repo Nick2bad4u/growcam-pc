@@ -309,5 +309,7 @@ def test_clear_refuses_while_a_preview_build_is_inflight(tmp_path: Path) -> None
 
 @pytest.mark.parametrize(("entries", "size"), [(0, 1), (1, 0), (-1, 1), (1, -1)])
 def test_cache_rejects_non_positive_limits(tmp_path: Path, entries: int, size: int) -> None:
+    cache_path = tmp_path / "cache"
+    lock = threading.Lock()
     with pytest.raises(ValueError, match="greater than zero"):
-        _ = MediaCache(tmp_path, threading.Lock(), maximum_entries=entries, maximum_bytes=size)
+        _ = MediaCache(cache_path, lock, maximum_entries=entries, maximum_bytes=size)

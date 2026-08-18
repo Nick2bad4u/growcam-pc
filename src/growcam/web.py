@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from contextlib import AbstractContextManager
     from io import BufferedIOBase
     from typing import BinaryIO
+    from urllib.parse import ParseResult
 
 from .dvrip import DVRIPClient, DVRIPError
 from .media import (
@@ -72,6 +73,10 @@ _TIMELAPSE_STREAM_FRAMES_PER_SECOND = 2.0
 _TIMELAPSE_CACHED_FRAMES_PER_SECOND = 25.0
 _WINDOWS_ADDRESS_IN_USE = 10048
 _LOCKED_LOGIN_RETURN_CODE = 205
+_SETTINGS_API = "/api/settings"
+_TIMELAPSE_API = "/api/timelapse"
+_MP4_CONTENT_TYPE = "video/mp4"
+_INVALID_BYTE_RANGE = "Media byte range is invalid"
 _ACCOUNT_REJECTION_RETURN_CODES = frozenset({106, 203, 204, 205, 206, 207, 430})
 _CONTENT_SECURITY_POLICY = (
     "default-src 'self'; base-uri 'none'; connect-src 'self'; form-action 'self'; "
@@ -445,69 +450,11 @@ class GrowCamHandler(BaseHTTPRequestHandler):
         self.send_header("X-Frame-Options", "DENY")
         super().end_headers()
 
-    def do_GET(self) -> None:  # noqa: C901, PLR0912, PLR0915 - explicit route dispatch is clearer here.
+    def do_GET(self) -> None:
         """Route one HTTP GET request."""
         request = urlparse(self.path)
         try:
-            if request.path == "/":
-                self._static("index.html", "text/html; charset=utf-8")
-            elif request.path == "/app.css":
-                self._static("app.css", "text/css; charset=utf-8")
-            elif request.path == "/app.js":
-                self._static("app.js", "text/javascript; charset=utf-8")
-            elif request.path == "/favicon.svg":
-                self._static("favicon.svg", "image/svg+xml")
-            elif request.path == "/api/info":
-                self._json(self._camera_info())
-            elif request.path == "/api/camera-control":
-                self._json(cast("GrowCamHTTPServer", self.server).camera_controls.snapshot().to_api())
-            elif request.path == "/api/settings":
-                self._json(self._settings_state())
-            elif request.path == "/api/recordings":
-                query = parse_qs(request.query)
-                hours = min(max(float(query.get("hours", ["24"])[0]), 0.1), 168.0)
-                self._json(self._recordings(hours))
-            elif request.path == "/api/history":
-                query = parse_qs(request.query)
-                self._json(self._history(query.get("date", [""])[0]))
-            elif request.path == "/api/files":
-                query = parse_qs(request.query)
-                self._json(self._files(query.get("date", [""])[0]))
-            elif request.path == "/api/history/preview":
-                query = parse_qs(request.query)
-                camera_file = query.get("file", [""])[0]
-                at = query.get("at", [""])[0]
-                duration = query.get("duration", [""])[0]
-                video_codec = _preview_video_codec(query.get("videoCodec", ["h264"])[0])
-                cache_only = query.get("cacheOnly", ["0"])[0] == "1"
-                self._history_preview(
-                    camera_file,
-                    at=at,
-                    duration=duration,
-                    video_codec=video_codec,
-                    cache_only=cache_only,
-                )
-            elif request.path == "/api/timelapse":
-                self._json(self._timelapse_state())
-            elif request.path == "/api/timelapse/preview":
-                query = parse_qs(request.query)
-                camera_file = query.get("file", [""])[0]
-                download = query.get("download", ["0"])[0] == "1"
-                cache_only = query.get("cacheOnly", ["0"])[0] == "1"
-                self._timelapse_preview(camera_file, download=download, cache_only=cache_only)
-            elif request.path == "/api/download":
-                query = parse_qs(request.query)
-                camera_file = query.get("file", [""])[0]
-                self._download(camera_file)
-            elif request.path == "/snapshot.jpg":
-                self._snapshot()
-            elif request.path == "/stream.mjpg":
-                query = parse_qs(request.query)
-                self._mjpeg(_live_quality(query.get("quality", [LiveQuality.FHD.value])[0]))
-            elif request.path == "/stream.mp3":
-                self._live_audio()
-            else:
-                self.send_error(HTTPStatus.NOT_FOUND)
+            self._route_get(request)
         except PreviewClientDisconnectedError:
             # Browsers routinely cancel a progressive media request after they
             # have enough data or replace it with a byte-range request. The
@@ -526,12 +473,77 @@ class GrowCamHandler(BaseHTTPRequestHandler):
         except (OSError, ValueError, RuntimeError) as error:
             self._json({"error": str(error)}, status=HTTPStatus.BAD_GATEWAY)
 
+    def _route_get(self, request: ParseResult) -> None:
+        """Dispatch a parsed GET request without mixing route selection and error handling."""
+        static_route = {
+            "/": ("index.html", "text/html; charset=utf-8"),
+            "/app.css": ("app.css", "text/css; charset=utf-8"),
+            "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+            "/favicon.svg": ("favicon.svg", "image/svg+xml"),
+        }.get(request.path)
+        if static_route is not None:
+            self._static(*static_route)
+            return
+
+        json_handler = {
+            "/api/info": self._camera_info,
+            _SETTINGS_API: self._settings_state,
+            _TIMELAPSE_API: self._timelapse_state,
+        }.get(request.path)
+        if json_handler is not None:
+            self._json(json_handler())
+            return
+        if request.path == "/api/camera-control":
+            self._json(cast("GrowCamHTTPServer", self.server).camera_controls.snapshot().to_api())
+            return
+
+        query = parse_qs(request.query)
+        if self._route_recording_get(request.path, query):
+            return
+        if request.path == "/snapshot.jpg":
+            self._snapshot()
+        elif request.path == "/stream.mjpg":
+            self._mjpeg(_live_quality(query.get("quality", [LiveQuality.FHD.value])[0]))
+        elif request.path == "/stream.mp3":
+            self._live_audio()
+        else:
+            self.send_error(HTTPStatus.NOT_FOUND)
+
+    def _route_recording_get(self, path: str, query: dict[str, list[str]]) -> bool:
+        """Serve recording and preview routes; return whether the path matched."""
+        if path == "/api/recordings":
+            hours = min(max(float(query.get("hours", ["24"])[0]), 0.1), 168.0)
+            self._json(self._recordings(hours))
+        elif path == "/api/history":
+            self._json(self._history(query.get("date", [""])[0]))
+        elif path == "/api/files":
+            self._json(self._files(query.get("date", [""])[0]))
+        elif path == "/api/history/preview":
+            self._history_preview(
+                query.get("file", [""])[0],
+                at=query.get("at", [""])[0],
+                duration=query.get("duration", [""])[0],
+                video_codec=_preview_video_codec(query.get("videoCodec", ["h264"])[0]),
+                cache_only=query.get("cacheOnly", ["0"])[0] == "1",
+            )
+        elif path == "/api/timelapse/preview":
+            self._timelapse_preview(
+                query.get("file", [""])[0],
+                download=query.get("download", ["0"])[0] == "1",
+                cache_only=query.get("cacheOnly", ["0"])[0] == "1",
+            )
+        elif path == "/api/download":
+            self._download(query.get("file", [""])[0])
+        else:
+            return False
+        return True
+
     def do_POST(self) -> None:  # noqa: C901, PLR0912 - each guarded update keeps explicit error mapping here.
         """Apply one guarded local configuration update."""
         request = urlparse(self.path)
         if request.path not in {
-            "/api/timelapse",
-            "/api/settings",
+            _TIMELAPSE_API,
+            _SETTINGS_API,
             "/api/cache/clear",
             "/api/camera-control/retry",
         }:
@@ -539,9 +551,9 @@ class GrowCamHandler(BaseHTTPRequestHandler):
             return
         try:
             payload = self._read_json_request()
-            if request.path == "/api/timelapse":
+            if request.path == _TIMELAPSE_API:
                 self._apply_timelapse_settings(payload)
-            elif request.path == "/api/settings":
+            elif request.path == _SETTINGS_API:
                 self._apply_app_settings(payload)
             elif request.path == "/api/camera-control/retry":
                 self._retry_camera_controls(payload)
@@ -851,7 +863,7 @@ class GrowCamHandler(BaseHTTPRequestHandler):
             return
         self._send_file(
             preview,
-            content_type="video/mp4",
+            content_type=_MP4_CONTENT_TYPE,
             disposition=disposition,
             cache_status="HIT" if cache_hit else "MISS",
         )
@@ -912,7 +924,7 @@ class GrowCamHandler(BaseHTTPRequestHandler):
             return
         self._send_file(
             preview,
-            content_type="video/mp4",
+            content_type=_MP4_CONTENT_TYPE,
             disposition=disposition,
             cache_status="HIT" if cache_hit else "MISS",
         )
@@ -988,7 +1000,7 @@ class GrowCamHandler(BaseHTTPRequestHandler):
         video_codec: str = "h264",
     ) -> None:
         self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", "video/mp4")
+        self.send_header("Content-Type", _MP4_CONTENT_TYPE)
         self.send_header("Content-Disposition", disposition)
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-GrowCam-Preview-Cache", "MISS")
@@ -1028,7 +1040,7 @@ class GrowCamHandler(BaseHTTPRequestHandler):
         if preview is not None:
             self._send_file(
                 preview,
-                content_type="video/mp4",
+                content_type=_MP4_CONTENT_TYPE,
                 disposition=disposition,
                 cache_status="HIT",
             )
@@ -1096,7 +1108,7 @@ class GrowCamHandler(BaseHTTPRequestHandler):
     def _read_json_request(self) -> dict[str, object]:  # noqa: C901 - defensive HTTP boundary validation.
         if self.headers.get("X-GrowCam-Request") != "1":
             raise WebRequestError(HTTPStatus.FORBIDDEN, "Missing local request confirmation header")
-        if not self.headers.get_content_type() == "application/json":
+        if self.headers.get_content_type() != "application/json":
             raise WebRequestError(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "Request body must be application/json")
         origin = self.headers.get("Origin")
         port = cast("tuple[str, int]", self.server.server_address)[1]
@@ -1423,29 +1435,36 @@ def _byte_range(header: str | None, file_size: int) -> tuple[int, int] | None:
         raise WebRequestError(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE, "Media file is empty")
     unit, separator, value = header.partition("=")
     if separator != "=" or unit.strip().casefold() != "bytes" or "," in value:
-        raise WebRequestError(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE, "Media byte range is invalid")
+        raise _invalid_byte_range()
+    start_value, end_value = _parse_byte_range_values(value)
+    start, end = _resolve_byte_range(start_value, end_value, file_size)
+    if start < 0 or start >= file_size or end < start:
+        raise WebRequestError(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE, "Media byte range is unsatisfiable")
+    return start, min(end, file_size - 1)
+
+
+def _parse_byte_range_values(value: str) -> tuple[int | None, int | None]:
     start_text, dash, end_text = value.strip().partition("-")
     if dash != "-" or (not start_text and not end_text):
-        raise WebRequestError(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE, "Media byte range is invalid")
+        raise _invalid_byte_range()
     try:
         start_value = int(start_text) if start_text else None
         end_value = int(end_text) if end_text else None
     except ValueError as error:
-        raise WebRequestError(
-            HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE,
-            "Media byte range is invalid",
-        ) from error
+        raise _invalid_byte_range() from error
+    return start_value, end_value
+
+
+def _resolve_byte_range(start_value: int | None, end_value: int | None, file_size: int) -> tuple[int, int]:
     if start_value is not None:
-        start = start_value
-        end = file_size - 1 if end_value is None else end_value
-    else:
-        if end_value is None or end_value <= 0:
-            raise WebRequestError(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE, "Media byte range is invalid")
-        start = max(0, file_size - end_value)
-        end = file_size - 1
-    if start < 0 or start >= file_size or end < start:
-        raise WebRequestError(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE, "Media byte range is unsatisfiable")
-    return start, min(end, file_size - 1)
+        return start_value, file_size - 1 if end_value is None else end_value
+    if end_value is None or end_value <= 0:
+        raise _invalid_byte_range()
+    return max(0, file_size - end_value), file_size - 1
+
+
+def _invalid_byte_range() -> WebRequestError:
+    return WebRequestError(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE, _INVALID_BYTE_RANGE)
 
 
 def _write_preview_chunk(output: BufferedIOBase, chunk: bytes) -> None:

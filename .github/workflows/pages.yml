@@ -11,9 +11,6 @@ on:
       - website/**
   workflow_dispatch:
 
-permissions:
-  contents: read
-
 concurrency:
   group: pages
   cancel-in-progress: false
@@ -23,6 +20,8 @@ jobs:
     name: Build documentation
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -34,7 +33,7 @@ jobs:
           cache: npm
 
       - name: Install locked dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0

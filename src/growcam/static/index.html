@@ -15,7 +15,7 @@
           <p class="eyebrow"><span class="nf" aria-hidden="true"></span> LOCAL CAMERA</p>
           <h1>GrowCam <span>PC</span></h1>
         </div>
-        <div id="connection" class="status pending" role="status">Connecting</div>
+        <output id="connection" class="status pending">Connecting</output>
       </header>
 
       <nav class="app-tabs" role="tablist" aria-label="Camera views">
@@ -66,10 +66,11 @@
           <div class="viewer-bar">
             <span><span class="nf" aria-hidden="true"></span> Live · <span id="live-resolution">connecting</span> <span id="live-audio-state">· audio off</span></span>
             <div class="viewer-actions">
-              <div class="quality-selector" role="group" aria-label="Live video quality">
+              <fieldset class="quality-selector">
+                <legend class="sr-only">Live video quality</legend>
                 <button class="compact quality-button" type="button" data-live-quality="sd" aria-pressed="false">SD</button>
                 <button class="compact quality-button selected" type="button" data-live-quality="fhd" aria-pressed="true">FHD</button>
-              </div>
+              </fieldset>
               <audio id="live-audio" data-src="/stream.mp3" preload="none"></audio>
               <button id="live-pause-toggle" class="compact" type="button" aria-pressed="false"><span class="nf" aria-hidden="true"></span> Pause live</button>
               <button id="live-audio-toggle" class="compact" type="button"><span class="nf" aria-hidden="true">󰝟</span> Enable audio</button>
@@ -174,7 +175,10 @@
               <button id="history-today" class="compact amber-button" type="button"><span class="nf" aria-hidden="true"></span> Today</button>
             </div>
             <div class="timeline-ruler" aria-hidden="true"><span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></div>
-            <div id="history-timeline" class="timeline-track" role="group" aria-label="Recording segments by time"></div>
+            <fieldset class="timeline-group">
+              <legend class="sr-only">Recording segments by time</legend>
+              <div id="history-timeline" class="timeline-track"></div>
+            </fieldset>
             <p id="history-status" class="muted" aria-live="polite">Loading today’s recording index…</p>
             <ol id="history-list" class="segment-list" aria-label="Recording segments"></ol>
           </article>
@@ -188,7 +192,7 @@
             <h2 id="timelapse-title">Time-lapse</h2>
             <p class="section-copy">Preview progress or adjust the camera schedule.</p>
           </div>
-          <div id="timelapse-state" class="status pending violet-status" role="status">Loading schedule</div>
+          <output id="timelapse-state" class="status pending violet-status">Loading schedule</output>
         </div>
 
         <div class="timelapse-grid">
@@ -359,7 +363,7 @@
             <h2>Application settings</h2>
             <p class="section-copy">Control generated preview storage and daily rewind behavior. These preferences stay on this PC.</p>
           </div>
-          <div id="app-settings-state" class="status pending" role="status">Loading settings</div>
+          <output id="app-settings-state" class="status pending">Loading settings</output>
         </div>
 
         <div class="app-settings-grid">
@@ -428,9 +432,9 @@
             </div>
             <progress id="cache-usage" max="1" value="0">0%</progress>
             <dl class="cache-details">
-              <div><dt>Cached previews</dt><dd id="cache-entry-count">—</dd></div>
-              <div><dt>Policy</dt><dd>LRU eviction</dd></div>
-              <div><dt>Storage</dt><dd>Local PC only</dd></div>
+              <dt>Cached previews</dt><dd id="cache-entry-count">—</dd>
+              <dt>Policy</dt><dd>LRU eviction</dd>
+              <dt>Storage</dt><dd>Local PC only</dd>
             </dl>
             <p class="cache-explainer">Clearing this cache removes only generated MP4 previews. Camera recordings and time-lapse files are never touched.</p>
             <button id="show-clear-cache" class="danger-button" type="button"><span class="nf" aria-hidden="true"></span> Clear generated previews</button>

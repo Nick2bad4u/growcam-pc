@@ -256,13 +256,12 @@ def test_stream_download_stops_camera_after_consumer_disconnect(monkeypatch: pyt
     monkeypatch.setattr(camera, "_send_packet", fake_send)
     monkeypatch.setattr(camera, "_request", fake_request)
     monkeypatch.setattr(camera, "_receive_packet", fake_receive)
+    camera_file = "/idea0/2026-08-02/001/00.30.00-00.40.00[R][0].h264"
+    output = cast("BinaryIO", DisconnectedOutput())
 
     try:
         with pytest.raises(BrokenPipeError):
-            _ = camera.stream_download(
-                "/idea0/2026-08-02/001/00.30.00-00.40.00[R][0].h264",
-                cast("BinaryIO", DisconnectedOutput()),
-            )
+            _ = camera.stream_download(camera_file, output)
     finally:
         camera.close()
 
