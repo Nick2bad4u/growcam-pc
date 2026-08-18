@@ -5,6 +5,28 @@ All notable changes to GrowCam PC are documented here. The project follows
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-08-17
+
+### Added
+
+- Add a raster GrowCam mark for uses that cannot consume the existing SVG.
+- Add pinned SonarQube Cloud analysis to CI with the repository's Python
+  coverage and test reports.
+
+### Changed
+
+- Refactor recording pagination, playback packet handling, preview metadata,
+  byte-range parsing, and browser routing into smaller tested units.
+- Harden workflow package installation and scope default GitHub permissions to
+  the jobs that need them.
+
+### Fixed
+
+- Improve dashboard contrast and native HTML semantics for status, quality,
+  recording timeline, and cache-detail controls.
+- Clear all actionable Sonar findings and document the reviewed local-network,
+  subprocess, filesystem, and locked-build security decisions.
+
 ## [1.2.0] - 2026-08-04
 
 ### Added
@@ -160,4 +182,5 @@ All notable changes to GrowCam PC are documented here. The project follows
 [1.0.0]: https://github.com/Nick2bad4u/growcam-pc/compare/v0.3.0...v1.0.0
 [1.1.0]: https://github.com/Nick2bad4u/growcam-pc/compare/v1.0.0...v1.1.0
 [1.2.0]: https://github.com/Nick2bad4u/growcam-pc/compare/v1.1.0...v1.2.0
-[Unreleased]: https://github.com/Nick2bad4u/growcam-pc/compare/v1.2.0...HEAD
+[1.2.1]: https://github.com/Nick2bad4u/growcam-pc/compare/v1.2.0...v1.2.1
+[Unreleased]: https://github.com/Nick2bad4u/growcam-pc/compare/v1.2.1...HEAD

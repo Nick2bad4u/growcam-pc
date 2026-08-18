@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "growcam-pc"
-version = "1.2.0"
+version = "1.2.1"
 description = "Local dashboard, daily rewind, and time-lapse tools for the VIVOSUN GrowCam C4"
 readme = "README.md"
 license = "MIT"
