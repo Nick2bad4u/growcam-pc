@@ -385,7 +385,8 @@ function renderCameraControlUnavailable(error) {
   document.querySelector("#timelapse-storage-note").textContent = "DVRIP access required";
 
   const note = document.querySelector("#camera-control-note");
-  const detail = String(cameraControlState.message || errorMessage(error)).trimEnd().replace(/\.+$/, "");
+  let detail = String(cameraControlState.message || errorMessage(error)).trimEnd();
+  while (detail.endsWith(".")) detail = detail.slice(0, -1);
   let nextStep = "Automatic DVRIP attempts are paused. Use the explicit retry button when you want to try once more.";
   if (cameraControlState.locked) {
     nextStep = "This server will not attempt another login after Ret=205. Unlock or reset the camera, then restart GrowCam.";
@@ -851,9 +852,11 @@ function renderHistory(payload) {
   if (recordings.length) {
     const playable = recordings.length - unplayable;
     const playableLabel = `${playable} playable block${playable === 1 ? "" : "s"}`;
-    const skippedLabel = unplayable
-      ? ` · ${unplayable} zero-duration camera artifact${unplayable === 1 ? "" : "s"} skipped`
-      : "";
+    let skippedLabel = "";
+    if (unplayable) {
+      const artifactSuffix = unplayable === 1 ? "" : "s";
+      skippedLabel = ` · ${unplayable} zero-duration camera artifact${artifactSuffix} skipped`;
+    }
     status.textContent = `${playableLabel}${skippedLabel} · choose a time.`;
   } else {
     status.textContent = "No recordings found for this day.";
