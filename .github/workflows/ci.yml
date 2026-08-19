@@ -156,9 +156,8 @@ jobs:
               run: "uv build --wheel --clear"
 
             - name: "Smoke-test installed command"
-              run: |
-                  uv pip install --no-deps --no-build dist/growcam_pc-1.3.0-py3-none-any.whl
-                  uv run --no-sync --no-build growcam --version
+              run: >-
+                  uv run --no-sync --no-build python -c "import runpy, sys; sys.argv[0] = 'growcam'; sys.path.insert(0, 'dist/growcam_pc-1.3.0-py3-none-any.whl'); runpy.run_module('growcam', run_name='__main__')" --version
 
     documentation:
         name: "Documentation and repository tooling"
