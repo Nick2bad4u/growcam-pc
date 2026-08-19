@@ -1,0 +1,27 @@
+{
+    "$schema": "https://www.schemastore.org/tsconfig.json",
+    "compilerOptions": {
+        "allowJs": true,
+        "checkJs": true,
+        "jsx": "react-jsx",
+        "module": "NodeNext",
+        "moduleResolution": "NodeNext",
+        "noEmit": true,
+        "strict": true,
+        "target": "ES2024",
+        "types": [
+            "@docusaurus/module-type-aliases",
+            "@docusaurus/theme-classic"
+        ]
+    },
+    "exclude": [
+        ".cache/**",
+        "build/**",
+        "coverage/**",
+        "dist/**",
+        "node_modules/**",
+        "website/.docusaurus/**",
+        "website/build/**"
+    ],
+    "include": ["**/*", "**/.*"]
+}
