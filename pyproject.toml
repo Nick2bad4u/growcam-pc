@@ -62,7 +62,7 @@
     growcam = [ "py.typed", "static/*.css", "static/*.html", "static/*.js", "static/*.svg" ]
 
 [tool.ruff]
-    required-version  = "==0.16.0"
+    required-version  = "==0.16.3"
     target-version    = "py311"
     line-length       = 120
     src               = [ "src", "tests" ]

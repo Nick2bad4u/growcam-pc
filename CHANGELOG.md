@@ -21,6 +21,8 @@ All notable changes to GrowCam PC are documented here. The project follows
   browser and server source contracts.
 - Polish the documentation landing page, navigation, responsive design,
   structured metadata, and accessible interaction treatments.
+- Update the locked Ruff and mypy development toolchain and keep Ruff's
+  required runtime version synchronized with the dependency constraint.
 - Replace the shared npm-package-json-lint preset with a project-owned ruleset
   tailored to this private Python and Docusaurus application.
 
@@ -30,6 +32,8 @@ All notable changes to GrowCam PC are documented here. The project follows
   clearing dirty state only when the submitted configuration still matches.
 - Replace dynamic icon markup writes with explicit DOM construction and harden
   browser error, event, comparison, and state handling.
+- Install only locked binary dependencies in CI, smoke-test the exact built
+  wheel, and simplify history status rendering for a clean Sonar quality gate.
 
 ## [1.2.1] - 2026-08-17
 

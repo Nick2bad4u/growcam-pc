@@ -1006,6 +1006,22 @@ async function clearMediaCache() {
 }
 
 /**
+ * @param {unknown[]} recordings
+ * @param {number} unplayable
+ * @returns {string}
+ */
+function historyStatusText(recordings, unplayable) {
+    if (recordings.length === 0) return "No recordings found for this day.";
+    const playable = recordings.length - unplayable;
+    const playableLabel = `${playable} playable block${playable === 1 ? "" : "s"}`;
+    const artifactSuffix = unplayable === 1 ? "" : "s";
+    const skippedLabel = unplayable
+        ? ` · ${unplayable} zero-duration camera artifact${artifactSuffix} skipped`
+        : "";
+    return `${playableLabel}${skippedLabel} · choose a time.`;
+}
+
+/**
  *
  */
 function renderHistory(payload) {
@@ -1086,18 +1102,7 @@ function renderHistory(payload) {
         const bounds = recordingBounds(recording);
         return bounds.end <= bounds.start;
     }).length;
-    if (recordings.length > 0) {
-        const playable = recordings.length - unplayable;
-        const playableLabel = `${playable} playable block${playable === 1 ? "" : "s"}`;
-        let skippedLabel = "";
-        if (unplayable) {
-            const artifactSuffix = unplayable === 1 ? "" : "s";
-            skippedLabel = ` · ${unplayable} zero-duration camera artifact${artifactSuffix} skipped`;
-        }
-        status.textContent = `${playableLabel}${skippedLabel} · choose a time.`;
-    } else {
-        status.textContent = "No recordings found for this day.";
-    }
+    status.textContent = historyStatusText(recordings, unplayable);
     document.querySelector("#history-position").textContent =
         `— / ${recordings.length}`;
     document.querySelector("#history-previous").disabled = true;

@@ -42,26 +42,26 @@ jobs:
                   cache-suffix: "quality"
 
             - name: "Install locked dependencies"
-              run: "uv sync --frozen --all-groups"
+              run: "uv sync --frozen --all-groups --no-install-project --no-build"
 
             - name: "Check formatting"
-              run: "uv run ruff format --check ."
+              run: "uv run --no-sync --no-build ruff format --check ."
 
             - name: "Lint"
-              run: "uv run ruff check ."
+              run: "uv run --no-sync --no-build ruff check ."
 
             - name: "Type-check with mypy"
-              run: "uv run mypy"
+              run: "uv run --no-sync --no-build mypy"
 
             - name: "Type-check with Pyright"
-              run: "uv run pyright"
+              run: "uv run --no-sync --no-build pyright"
 
             - name: "Compile"
-              run: "uv run python -m compileall -q src tests"
+              run: "uv run --no-sync --no-build python -m compileall -q src tests"
 
             - name: "Test with branch coverage"
               run: >-
-                  uv run pytest --cov --cov-report=term-missing --cov-report=xml --junitxml=coverage/pytest/junit.xml
+                  uv run --no-sync --no-build pytest --cov --cov-report=term-missing --cov-report=xml --junitxml=coverage/pytest/junit.xml
 
             - name: "Analyze with SonarQube Cloud"
               if: "${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}"
@@ -107,7 +107,7 @@ jobs:
               run: "uv build --clear"
 
             - name: "Validate distributions"
-              run: "uv run twine check dist/*"
+              run: "uv run --no-sync --no-build twine check dist/*"
 
     compatibility:
         name: "${{ matrix.os }} / Python ${{ matrix.python }}"
@@ -147,16 +147,18 @@ jobs:
                   cache-suffix: "${{ matrix.os }}-py${{ matrix.python }}"
 
             - name: "Install locked dependencies"
-              run: "uv sync --frozen --all-groups"
+              run: "uv sync --frozen --all-groups --no-install-project --no-build"
 
             - name: "Test"
-              run: "uv run pytest -q"
+              run: "uv run --no-sync --no-build pytest -q"
 
             - name: "Build wheel"
               run: "uv build --wheel --clear"
 
             - name: "Smoke-test installed command"
-              run: "uv tool run --from . growcam --version"
+              run: |
+                  uv pip install --no-deps --no-build dist/growcam_pc-1.3.0-py3-none-any.whl
+                  uv run --no-sync --no-build growcam --version
 
     documentation:
         name: "Documentation and repository tooling"
