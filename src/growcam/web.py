@@ -1001,7 +1001,7 @@ class GrowCamHandler(BaseHTTPRequestHandler):
     ) -> None:
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", _MP4_CONTENT_TYPE)
-        self.send_header("Content-Disposition", disposition)
+        self.send_header("Content-Disposition", _safe_content_disposition(disposition))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-GrowCam-Preview-Cache", "MISS")
         self.send_header("X-GrowCam-Preview-Streaming", "1")
@@ -1162,7 +1162,7 @@ class GrowCamHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(content_length))
-        self.send_header("Content-Disposition", disposition)
+        self.send_header("Content-Disposition", _safe_content_disposition(disposition))
         self.send_header("Cache-Control", "no-store")
         self.send_header("Accept-Ranges", "bytes")
         if status is HTTPStatus.PARTIAL_CONTENT:
@@ -1549,3 +1549,11 @@ def _preview_name(camera_file: str) -> str:
 
 def _history_preview_name(camera_file: str) -> str:
     return _download_name(camera_file).replace(".mkv", "-rewind.mp4")
+
+
+def _safe_content_disposition(value: str) -> str:
+    """Reject newline characters before writing a Content-Disposition header."""
+    sanitized = value.replace("\r", "").replace("\n", "")
+    if sanitized != value:
+        raise ValueError("Content-Disposition values cannot contain newlines")
+    return sanitized

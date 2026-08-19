@@ -1438,3 +1438,8 @@ def test_cached_media_supports_http_range_requests(
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_content_disposition_rejects_response_splitting() -> None:
+    with pytest.raises(ValueError, match="cannot contain newlines"):
+        _ = web._safe_content_disposition('inline; filename="preview.mp4"\r\nX-Injected: true')

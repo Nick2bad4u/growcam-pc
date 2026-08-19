@@ -34,6 +34,8 @@ All notable changes to GrowCam PC are documented here. The project follows
   browser error, event, comparison, and state handling.
 - Install only locked binary dependencies in CI, smoke-test the exact built
   wheel, and simplify history status rendering for a clean Sonar quality gate.
+- Reject newline injection in media download headers and document the
+  protocol-mandated legacy Sofia hash boundary used for camera authentication.
 
 ## [1.2.1] - 2026-08-17
 

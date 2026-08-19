@@ -72,6 +72,9 @@ class LoginInfo:
 
 def sofia_hash(password: str) -> str:
     """Encode a password using Xiongmai's eight-character Sofia hash."""
+    # DVRIP requires this legacy MD5-derived wire representation. It is not
+    # used for local password storage and cannot be changed without breaking
+    # authentication compatibility with the camera firmware.
     digest = hashlib.md5(password.encode("utf-8"), usedforsecurity=False).digest()
     return "".join(_SOFIA_CHARS[(digest[index * 2] + digest[index * 2 + 1]) % 62] for index in range(8))
 
