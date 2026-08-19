@@ -1,473 +1,1251 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#071013" />
-    <title>GrowCam PC</title>
-    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/app.css" />
-  </head>
-  <body>
-    <main>
-      <header class="page-header">
-        <div>
-          <p class="eyebrow"><span class="nf" aria-hidden="true"></span> LOCAL CAMERA</p>
-          <h1>GrowCam <span>PC</span></h1>
-        </div>
-        <output id="connection" class="status pending">Connecting</output>
-      </header>
-
-      <nav class="app-tabs" role="tablist" aria-label="Camera views">
-        <button id="tab-live" class="app-tab" type="button" role="tab" aria-selected="true" aria-controls="panel-live" data-tab="live">
-          <span class="nf" aria-hidden="true">󰖟</span>
-          <span>Live</span>
-        </button>
-        <button id="tab-rewind" class="app-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-rewind" data-tab="rewind" tabindex="-1">
-          <span class="nf" aria-hidden="true"></span>
-          <span>Rewind</span>
-        </button>
-        <button id="tab-timelapse" class="app-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-timelapse" data-tab="timelapse" tabindex="-1">
-          <span class="nf" aria-hidden="true">󰔚</span>
-          <span>Time-lapse</span>
-        </button>
-        <button id="tab-files" class="app-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-files" data-tab="files" tabindex="-1">
-          <span class="nf" aria-hidden="true"></span>
-          <span>Files</span>
-        </button>
-        <button id="tab-settings" class="app-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-settings" data-tab="settings" tabindex="-1">
-          <span class="nf" aria-hidden="true"></span>
-          <span>Settings</span>
-        </button>
-      </nav>
-
-      <aside id="camera-control-note" class="camera-control-note" aria-live="polite" hidden>
-        <span class="nf" aria-hidden="true"></span>
-        <div class="camera-control-copy">
-          <strong>Camera controls unavailable</strong>
-          <p id="camera-control-error">Storage and recordings require the camera control connection.</p>
-        </div>
-        <button id="camera-control-retry" class="compact amber-button" type="button">
-          <span class="nf" aria-hidden="true">󰑓</span>
-          Retry camera controls
-        </button>
-      </aside>
-
-      <section id="panel-live" class="tab-panel" role="tabpanel" aria-labelledby="tab-live">
-        <section class="viewer live-accent" aria-label="Live camera view">
-          <div id="live-state-label" class="feed-label"><span class="pulse" aria-hidden="true"></span> <span id="live-state-text">LIVE</span></div>
-          <div class="live-stage">
-            <img id="live-feed" data-src="/stream.mjpg" alt="Live GrowCam video" />
-            <p id="live-placeholder" class="live-placeholder">
-              <span class="nf stage-icon" aria-hidden="true">󰖟</span>
-              <span id="live-message">Starting live video…</span>
-            </p>
-          </div>
-          <div class="viewer-bar">
-            <span><span class="nf" aria-hidden="true"></span> Live · <span id="live-resolution">connecting</span> <span id="live-audio-state">· audio off</span></span>
-            <div class="viewer-actions">
-              <fieldset class="quality-selector">
-                <legend class="sr-only">Live video quality</legend>
-                <button class="compact quality-button" type="button" data-live-quality="sd" aria-pressed="false">SD</button>
-                <button class="compact quality-button selected" type="button" data-live-quality="fhd" aria-pressed="true">FHD</button>
-              </fieldset>
-              <audio id="live-audio" data-src="/stream.mp3" preload="none"></audio>
-              <button id="live-pause-toggle" class="compact" type="button" aria-pressed="false"><span class="nf" aria-hidden="true"></span> Pause live</button>
-              <button id="live-audio-toggle" class="compact" type="button"><span class="nf" aria-hidden="true">󰝟</span> Enable audio</button>
-              <a class="icon-link" href="/snapshot.jpg" download="growcam-snapshot.jpg"><span class="nf" aria-hidden="true"></span> Snapshot</a>
-            </div>
-          </div>
-        </section>
-
-        <section class="metrics" aria-label="Camera status">
-          <article class="metric-device">
-            <p><span class="nf" aria-hidden="true"></span> Device</p>
-            <strong id="device">—</strong>
-            <small id="firmware">Loading firmware…</small>
-          </article>
-          <article class="metric-storage">
-            <p><span class="nf" aria-hidden="true"></span> Recording storage</p>
-            <strong id="storage-total">—</strong>
-            <small id="storage-window">Loading storage…</small>
-          </article>
-          <article class="metric-free">
-            <p><span class="nf" aria-hidden="true"></span> Free space</p>
-            <strong id="storage-free">—</strong>
-            <small id="storage-percent">—</small>
-          </article>
-          <article class="metric-timelapse">
-            <p><span class="nf" aria-hidden="true">󰔚</span> Estimated time-lapse reserve</p>
-            <strong id="timelapse-storage-estimate">—</strong>
-            <small id="timelapse-storage-note">Loading allocation estimate…</small>
-          </article>
-        </section>
-      </section>
-
-      <section id="panel-rewind" class="rewind section-block tab-panel" role="tabpanel" aria-labelledby="tab-rewind" hidden>
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow amber"><span class="nf" aria-hidden="true"></span> DAY ARCHIVE</p>
-            <h2 id="rewind-title">Daily rewind</h2>
-            <p class="section-copy">Browse continuous recordings by time.</p>
-          </div>
-          <label class="date-control">
-            <span>Recording day</span>
-            <input id="history-date" type="date" />
-          </label>
-        </div>
-
-        <article class="day-scrubber card">
-          <div class="scrubber-heading">
-            <div>
-              <p class="card-label amber"><span class="nf" aria-hidden="true">󰍹</span> Day scrubber</p>
-              <strong>Choose a recorded moment</strong>
-            </div>
-            <output id="history-scrubber-time" for="history-scrubber">12:00 AM</output>
-          </div>
-          <input id="history-scrubber" class="day-range" type="range" min="0" max="86399" step="1" value="0" aria-label="Time of day" />
-          <div class="scrubber-ruler" aria-hidden="true"><span>12 AM</span><span>6 AM</span><span>12 PM</span><span>6 PM</span><span>12 AM</span></div>
-          <div class="viewer-options">
-            <label class="window-control" for="history-window">
-              <span>Preview length</span>
-              <select id="history-window">
-                <option value="60">1 minute</option>
-                <option value="120" selected>2 minutes</option>
-                <option value="300">5 minutes</option>
-                <option value="600">10 minutes</option>
-                <option value="full">Full recording block</option>
-              </select>
-            </label>
-            <label class="toggle compact-toggle">
-              <input id="history-continue" type="checkbox" checked />
-              <span>Continue to the next window</span>
-            </label>
-          </div>
-        </article>
-
-        <div class="rewind-grid">
-          <article class="rewind-player card" aria-busy="false">
-            <div class="card-heading">
-              <div>
-                <p class="card-label amber">Selected recording</p>
-                <strong id="history-title">Choose a segment below</strong>
-              </div>
-              <span id="history-position" class="file-state">— / —</span>
-            </div>
-            <div class="video-stage history-stage">
-              <video id="history-player" controls playsinline preload="auto"></video>
-              <p id="history-placeholder"><span class="nf stage-icon" aria-hidden="true"></span>Choose a recorded time.</p>
-            </div>
-            <div class="player-footer">
-              <div class="transport-controls">
-                <button id="history-previous" class="compact" type="button" disabled><span class="nf" aria-hidden="true"></span> Previous</button>
-                <button id="history-next" class="compact" type="button" disabled>Next <span class="nf" aria-hidden="true"></span></button>
-              </div>
-              <a id="history-download" class="icon-link" href="#" hidden><span class="nf" aria-hidden="true"></span> Download MKV</a>
-            </div>
-          </article>
-
-          <article class="timeline-card card" aria-busy="false">
-            <div class="card-heading">
-              <div>
-                <p class="card-label amber">24-hour timeline</p>
-                <h3 id="history-day-label">Today</h3>
-              </div>
-              <button id="history-today" class="compact amber-button" type="button"><span class="nf" aria-hidden="true"></span> Today</button>
-            </div>
-            <div class="timeline-ruler" aria-hidden="true"><span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></div>
-            <fieldset class="timeline-group">
-              <legend class="sr-only">Recording segments by time</legend>
-              <div id="history-timeline" class="timeline-track"></div>
-            </fieldset>
-            <p id="history-status" class="muted" aria-live="polite">Loading today’s recording index…</p>
-            <ol id="history-list" class="segment-list" aria-label="Recording segments"></ol>
-          </article>
-        </div>
-      </section>
-
-      <section id="panel-timelapse" class="timelapse section-block tab-panel" role="tabpanel" aria-labelledby="tab-timelapse" aria-busy="false" hidden>
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow violet"><span class="nf" aria-hidden="true">󰔚</span> INTERVAL CAPTURE</p>
-            <h2 id="timelapse-title">Time-lapse</h2>
-            <p class="section-copy">Preview progress or adjust the camera schedule.</p>
-          </div>
-          <output id="timelapse-state" class="status pending violet-status">Loading schedule</output>
-        </div>
-
-        <div class="timelapse-grid">
-          <article class="progress-card card">
-            <p class="card-label violet">Current schedule</p>
-            <strong id="timelapse-progress-label">—</strong>
-            <progress id="timelapse-progress" max="100" value="0">0%</progress>
-            <div class="progress-meta">
-              <span id="timelapse-captures">— captures</span>
-              <span id="timelapse-dates">—</span>
-            </div>
-            <p id="timelapse-interval" class="muted">Loading capture interval…</p>
-          </article>
-
-          <article class="preview-card card">
-            <div class="card-heading">
-              <div>
-                <p class="card-label violet">Progress preview</p>
-                <strong id="preview-title">No preview loaded</strong>
-              </div>
-              <button id="preview-latest" class="violet-button" type="button" disabled><span class="nf" aria-hidden="true"></span> Preview latest</button>
-            </div>
-            <div class="video-stage preview-stage">
-              <video id="timelapse-preview" controls playsinline preload="auto"></video>
-              <p id="preview-placeholder"><span class="nf stage-icon" aria-hidden="true">󰔚</span>Preview every frame captured so far.</p>
-            </div>
-            <div class="player-footer">
-              <p id="preview-status" class="muted" aria-live="polite">Preview is read-only.</p>
-              <div class="preview-actions">
-                <label class="playback-speed" for="timelapse-speed">
-                  <span>Speed</span>
-                  <select id="timelapse-speed">
-                    <option value="0.1">0.1×</option>
-                    <option value="0.25">0.25×</option>
-                    <option value="0.5">0.5×</option>
-                    <option value="1" selected>1×</option>
-                    <option value="2">2×</option>
-                    <option value="4">4×</option>
-                    <option value="8">8×</option>
-                  </select>
-                </label>
-                <a id="save-preview" class="icon-link violet-link" href="#" hidden><span class="nf" aria-hidden="true"></span> Save preview</a>
-              </div>
-            </div>
-          </article>
-        </div>
-
-        <div class="timelapse-lower">
-          <form id="timelapse-form" class="settings-card card">
-            <div class="card-heading">
-              <div>
-                <p class="card-label"><span class="nf" aria-hidden="true"></span> Camera schedule</p>
-                <h3>Capture settings</h3>
-              </div>
-              <label class="toggle">
-                <input id="timelapse-enabled" name="enabled" type="checkbox" />
-                <span>Enabled</span>
-              </label>
-            </div>
-
-            <div class="form-grid">
-              <label>
-                Interval (seconds)
-                <input id="timelapse-interval-seconds" name="intervalSeconds" type="number" min="1" max="86400" required />
-              </label>
-              <label>
-                Start
-                <input id="timelapse-start" name="startTime" type="datetime-local" step="1" required />
-              </label>
-              <label>
-                End
-                <input id="timelapse-end" name="endTime" type="datetime-local" step="1" required />
-              </label>
-              <fieldset>
-                <legend>Daily capture window</legend>
-                <div class="time-range">
-                  <label>From<input id="timelapse-daily-start" name="dailyStart" type="time" step="1" required /></label>
-                  <span aria-hidden="true">→</span>
-                  <label>To<input id="timelapse-daily-end" name="dailyEnd" type="time" step="1" required /></label>
+    <head>
+        <meta charset="utf-8" />
+        <meta
+            name="viewport"
+            content="width=device-width, initial-scale=1"
+        />
+        <meta
+            name="theme-color"
+            content="#071013"
+        />
+        <title>GrowCam PC</title>
+        <link
+            rel="icon"
+            href="/favicon.svg"
+            type="image/svg+xml"
+        />
+        <link
+            rel="stylesheet"
+            href="/app.css"
+        />
+    </head>
+    <body>
+        <main>
+            <header class="page-header">
+                <div>
+                    <p class="eyebrow"
+                        ><span
+                            class="nf"
+                            aria-hidden="true"
+                            ></span
+                        >
+                        LOCAL CAMERA</p
+                    >
+                    <h1>GrowCam <span>PC</span></h1>
                 </div>
-              </fieldset>
-            </div>
+                <output
+                    id="connection"
+                    class="status pending"
+                    >Connecting</output
+                >
+            </header>
 
-            <div class="form-actions">
-              <p id="settings-status" class="muted" aria-live="polite">Changes require a review before they reach the camera.</p>
-              <button id="review-settings" type="submit"><span class="nf" aria-hidden="true"></span> Review changes</button>
-            </div>
-          </form>
+            <nav
+                class="app-tabs"
+                role="tablist"
+                aria-label="Camera views"
+            >
+                <button
+                    id="tab-live"
+                    class="app-tab"
+                    type="button"
+                    role="tab"
+                    aria-selected="true"
+                    aria-controls="panel-live"
+                    data-tab="live"
+                >
+                    <span
+                        class="nf"
+                        aria-hidden="true"
+                        >󰖟</span
+                    >
+                    <span>Live</span>
+                </button>
+                <button
+                    id="tab-rewind"
+                    class="app-tab"
+                    type="button"
+                    role="tab"
+                    aria-selected="false"
+                    aria-controls="panel-rewind"
+                    data-tab="rewind"
+                    tabindex="-1"
+                >
+                    <span
+                        class="nf"
+                        aria-hidden="true"
+                        ></span
+                    >
+                    <span>Rewind</span>
+                </button>
+                <button
+                    id="tab-timelapse"
+                    class="app-tab"
+                    type="button"
+                    role="tab"
+                    aria-selected="false"
+                    aria-controls="panel-timelapse"
+                    data-tab="timelapse"
+                    tabindex="-1"
+                >
+                    <span
+                        class="nf"
+                        aria-hidden="true"
+                        >󰔚</span
+                    >
+                    <span>Time-lapse</span>
+                </button>
+                <button
+                    id="tab-files"
+                    class="app-tab"
+                    type="button"
+                    role="tab"
+                    aria-selected="false"
+                    aria-controls="panel-files"
+                    data-tab="files"
+                    tabindex="-1"
+                >
+                    <span
+                        class="nf"
+                        aria-hidden="true"
+                        ></span
+                    >
+                    <span>Files</span>
+                </button>
+                <button
+                    id="tab-settings"
+                    class="app-tab"
+                    type="button"
+                    role="tab"
+                    aria-selected="false"
+                    aria-controls="panel-settings"
+                    data-tab="settings"
+                    tabindex="-1"
+                >
+                    <span
+                        class="nf"
+                        aria-hidden="true"
+                        ></span
+                    >
+                    <span>Settings</span>
+                </button>
+            </nav>
 
-          <article class="timelapse-files card">
-            <div class="card-heading">
-              <div>
-                <p class="card-label violet"><span class="nf" aria-hidden="true"></span> TIME-LAPSE FILES</p>
-                <h3>Reserved storage</h3>
-              </div>
-              <button id="refresh-timelapse" class="compact" type="button"><span class="nf" aria-hidden="true"></span> Refresh</button>
-            </div>
-            <p id="timelapse-file-status" class="muted">Loading timelapse recordings…</p>
-            <div class="table-wrap">
-              <table>
-                <thead><tr><th>Status</th><th>Captured through</th><th>Size</th><th>Actions</th></tr></thead>
-                <tbody id="timelapse-list"></tbody>
-              </table>
-            </div>
-          </article>
-        </div>
-      </section>
+            <aside
+                id="camera-control-note"
+                class="camera-control-note"
+                aria-live="polite"
+                hidden
+            >
+                <span
+                    class="nf"
+                    aria-hidden="true"
+                    ></span
+                >
+                <div class="camera-control-copy">
+                    <strong>Camera controls unavailable</strong>
+                    <p id="camera-control-error"
+                        >Storage and recordings require the camera control
+                        connection.</p
+                    >
+                </div>
+                <button
+                    id="camera-control-retry"
+                    class="compact amber-button"
+                    type="button"
+                >
+                    <span
+                        class="nf"
+                        aria-hidden="true"
+                        >󰑓</span
+                    >
+                    Retry camera controls
+                </button>
+            </aside>
 
-      <section id="panel-files" class="files section-block tab-panel" role="tabpanel" aria-labelledby="tab-files" aria-busy="false" hidden>
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow green"><span class="nf" aria-hidden="true"></span> CAMERA STORAGE</p>
-            <h2>File browser</h2>
-            <p class="section-copy">Find and download closed recordings from both camera partitions.</p>
-          </div>
-          <label class="date-control files-date">
-            <span>Day</span>
-            <input id="files-date" type="date" />
-          </label>
-        </div>
+            <section
+                id="panel-live"
+                class="tab-panel"
+                role="tabpanel"
+                aria-labelledby="tab-live"
+            >
+                <section
+                    class="viewer live-accent"
+                    aria-label="Live camera view"
+                >
+                    <div
+                        id="live-state-label"
+                        class="feed-label"
+                        ><span
+                            class="pulse"
+                            aria-hidden="true"
+                        ></span>
+                        <span id="live-state-text">LIVE</span></div
+                    >
+                    <div class="live-stage">
+                        <img
+                            id="live-feed"
+                            data-src="/stream.mjpg"
+                            alt="Live GrowCam video"
+                        />
+                        <p
+                            id="live-placeholder"
+                            class="live-placeholder"
+                        >
+                            <span
+                                class="nf stage-icon"
+                                aria-hidden="true"
+                                >󰖟</span
+                            >
+                            <span id="live-message">Starting live video…</span>
+                        </p>
+                    </div>
+                    <div class="viewer-bar">
+                        <span
+                            ><span
+                                class="nf"
+                                aria-hidden="true"
+                                ></span
+                            >
+                            Live · <span id="live-resolution">connecting</span>
+                            <span id="live-audio-state">· audio off</span></span
+                        >
+                        <div class="viewer-actions">
+                            <fieldset class="quality-selector">
+                                <legend class="sr-only"
+                                    >Live video quality</legend
+                                >
+                                <button
+                                    class="compact quality-button"
+                                    type="button"
+                                    data-live-quality="sd"
+                                    aria-pressed="false"
+                                    >SD</button
+                                >
+                                <button
+                                    class="compact quality-button selected"
+                                    type="button"
+                                    data-live-quality="fhd"
+                                    aria-pressed="true"
+                                    >FHD</button
+                                >
+                            </fieldset>
+                            <audio
+                                id="live-audio"
+                                data-src="/stream.mp3"
+                                preload="none"
+                            ></audio>
+                            <button
+                                id="live-pause-toggle"
+                                class="compact"
+                                type="button"
+                                aria-pressed="false"
+                                ><span
+                                    class="nf"
+                                    aria-hidden="true"
+                                    ></span
+                                >
+                                Pause live</button
+                            >
+                            <button
+                                id="live-audio-toggle"
+                                class="compact"
+                                type="button"
+                                ><span
+                                    class="nf"
+                                    aria-hidden="true"
+                                    >󰝟</span
+                                >
+                                Enable audio</button
+                            >
+                            <a
+                                class="icon-link"
+                                href="/snapshot.jpg"
+                                download="growcam-snapshot.jpg"
+                                ><span
+                                    class="nf"
+                                    aria-hidden="true"
+                                    ></span
+                                >
+                                Snapshot</a
+                            >
+                        </div>
+                    </div>
+                </section>
 
-        <article class="file-browser card">
-          <div class="file-toolbar">
-            <label class="file-search">
-              <span class="nf" aria-hidden="true"></span>
-              <span class="sr-only">Search camera files</span>
-              <input id="files-search" type="search" placeholder="Search files" autocomplete="off" />
-            </label>
-            <label>
-              <span class="sr-only">File type</span>
-              <select id="files-kind">
-                <option value="all">All files</option>
-                <option value="recording">Recordings</option>
-                <option value="timelapse">Time-lapses</option>
-              </select>
-            </label>
-            <label>
-              <span class="sr-only">Sort files</span>
-              <select id="files-sort">
-                <option value="newest">Newest first</option>
-                <option value="oldest">Oldest first</option>
-                <option value="largest">Largest first</option>
-              </select>
-            </label>
-            <button id="files-refresh" class="compact green-button" type="button"><span class="nf" aria-hidden="true"></span> Refresh</button>
-          </div>
+                <section
+                    class="metrics"
+                    aria-label="Camera status"
+                >
+                    <article class="metric-device">
+                        <p
+                            ><span
+                                class="nf"
+                                aria-hidden="true"
+                                ></span
+                            >
+                            Device</p
+                        >
+                        <strong id="device">—</strong>
+                        <small id="firmware">Loading firmware…</small>
+                    </article>
+                    <article class="metric-storage">
+                        <p
+                            ><span
+                                class="nf"
+                                aria-hidden="true"
+                                ></span
+                            >
+                            Recording storage</p
+                        >
+                        <strong id="storage-total">—</strong>
+                        <small id="storage-window">Loading storage…</small>
+                    </article>
+                    <article class="metric-free">
+                        <p
+                            ><span
+                                class="nf"
+                                aria-hidden="true"
+                                ></span
+                            >
+                            Free space</p
+                        >
+                        <strong id="storage-free">—</strong>
+                        <small id="storage-percent">—</small>
+                    </article>
+                    <article class="metric-timelapse">
+                        <p
+                            ><span
+                                class="nf"
+                                aria-hidden="true"
+                                >󰔚</span
+                            >
+                            Estimated time-lapse reserve</p
+                        >
+                        <strong id="timelapse-storage-estimate">—</strong>
+                        <small id="timelapse-storage-note"
+                            >Loading allocation estimate…</small
+                        >
+                    </article>
+                </section>
+            </section>
 
-          <div class="file-summary" aria-live="polite">
-            <strong id="files-count">— files</strong>
-            <span id="files-breakdown">—</span>
-            <span id="files-size">—</span>
-          </div>
+            <section
+                id="panel-rewind"
+                class="rewind section-block tab-panel"
+                role="tabpanel"
+                aria-labelledby="tab-rewind"
+                hidden
+            >
+                <div class="section-heading">
+                    <div>
+                        <p class="eyebrow amber"
+                            ><span
+                                class="nf"
+                                aria-hidden="true"
+                                ></span
+                            >
+                            DAY ARCHIVE</p
+                        >
+                        <h2 id="rewind-title">Daily rewind</h2>
+                        <p class="section-copy"
+                            >Browse continuous recordings by time.</p
+                        >
+                    </div>
+                    <label class="date-control">
+                        <span>Recording day</span>
+                        <input
+                            id="history-date"
+                            type="date"
+                        />
+                    </label>
+                </div>
 
-          <div class="table-wrap file-table-wrap">
-            <table class="file-table">
-              <thead><tr><th>Type</th><th>Started</th><th>Duration</th><th>Size</th><th>Status</th><th>Action</th></tr></thead>
-              <tbody id="files-list"></tbody>
-            </table>
-          </div>
-          <p id="files-status" class="empty-state muted" aria-live="polite">Loading camera files…</p>
-        </article>
-      </section>
+                <article class="day-scrubber card">
+                    <div class="scrubber-heading">
+                        <div>
+                            <p class="card-label amber"
+                                ><span
+                                    class="nf"
+                                    aria-hidden="true"
+                                    >󰍹</span
+                                >
+                                Day scrubber</p
+                            >
+                            <strong>Choose a recorded moment</strong>
+                        </div>
+                        <output
+                            id="history-scrubber-time"
+                            for="history-scrubber"
+                            >12:00 AM</output
+                        >
+                    </div>
+                    <input
+                        id="history-scrubber"
+                        class="day-range"
+                        type="range"
+                        min="0"
+                        max="86399"
+                        step="1"
+                        value="0"
+                        aria-label="Time of day"
+                    />
+                    <div
+                        class="scrubber-ruler"
+                        aria-hidden="true"
+                        ><span>12 AM</span><span>6 AM</span><span>12 PM</span
+                        ><span>6 PM</span><span>12 AM</span></div
+                    >
+                    <div class="viewer-options">
+                        <label
+                            class="window-control"
+                            for="history-window"
+                        >
+                            <span>Preview length</span>
+                            <select id="history-window">
+                                <option value="60">1 minute</option>
+                                <option
+                                    value="120"
+                                    selected
+                                    >2 minutes</option
+                                >
+                                <option value="300">5 minutes</option>
+                                <option value="600">10 minutes</option>
+                                <option value="full"
+                                    >Full recording block</option
+                                >
+                            </select>
+                        </label>
+                        <label class="toggle compact-toggle">
+                            <input
+                                id="history-continue"
+                                type="checkbox"
+                                checked
+                            />
+                            <span>Continue to the next window</span>
+                        </label>
+                    </div>
+                </article>
 
-      <section id="panel-settings" class="app-settings section-block tab-panel" role="tabpanel" aria-labelledby="tab-settings" aria-busy="false" hidden>
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow blue"><span class="nf" aria-hidden="true"></span> LOCAL PREFERENCES</p>
-            <h2>Application settings</h2>
-            <p class="section-copy">Control generated preview storage and daily rewind behavior. These preferences stay on this PC.</p>
-          </div>
-          <output id="app-settings-state" class="status pending">Loading settings</output>
-        </div>
+                <div class="rewind-grid">
+                    <article
+                        class="rewind-player card"
+                        aria-busy="false"
+                    >
+                        <div class="card-heading">
+                            <div>
+                                <p class="card-label amber"
+                                    >Selected recording</p
+                                >
+                                <strong id="history-title"
+                                    >Choose a segment below</strong
+                                >
+                            </div>
+                            <span
+                                id="history-position"
+                                class="file-state"
+                                >— / —</span
+                            >
+                        </div>
+                        <div class="video-stage history-stage">
+                            <video
+                                id="history-player"
+                                controls
+                                playsinline
+                                preload="auto"
+                            ></video>
+                            <p id="history-placeholder"
+                                ><span
+                                    class="nf stage-icon"
+                                    aria-hidden="true"
+                                    ></span
+                                >Choose a recorded time.</p
+                            >
+                        </div>
+                        <div class="player-footer">
+                            <div class="transport-controls">
+                                <button
+                                    id="history-previous"
+                                    class="compact"
+                                    type="button"
+                                    disabled
+                                    ><span
+                                        class="nf"
+                                        aria-hidden="true"
+                                        ></span
+                                    >
+                                    Previous</button
+                                >
+                                <button
+                                    id="history-next"
+                                    class="compact"
+                                    type="button"
+                                    disabled
+                                    >Next
+                                    <span
+                                        class="nf"
+                                        aria-hidden="true"
+                                        ></span
+                                    ></button
+                                >
+                            </div>
+                            <a
+                                id="history-download"
+                                class="icon-link"
+                                href="#"
+                                hidden
+                                ><span
+                                    class="nf"
+                                    aria-hidden="true"
+                                    ></span
+                                >
+                                Download MKV</a
+                            >
+                        </div>
+                    </article>
 
-        <div class="app-settings-grid">
-          <form id="app-settings-form" class="card app-settings-card">
-            <div class="card-heading">
-              <div>
-                <p class="card-label"><span class="nf" aria-hidden="true">󰒓</span> Interface defaults</p>
-                <h3>Playback and cache</h3>
-              </div>
-              <span class="settings-saved"><span class="nf" aria-hidden="true">󰆓</span> JSON backed</span>
-            </div>
+                    <article
+                        class="timeline-card card"
+                        aria-busy="false"
+                    >
+                        <div class="card-heading">
+                            <div>
+                                <p class="card-label amber">24-hour timeline</p>
+                                <h3 id="history-day-label">Today</h3>
+                            </div>
+                            <button
+                                id="history-today"
+                                class="compact amber-button"
+                                type="button"
+                                ><span
+                                    class="nf"
+                                    aria-hidden="true"
+                                    ></span
+                                >
+                                Today</button
+                            >
+                        </div>
+                        <div
+                            class="timeline-ruler"
+                            aria-hidden="true"
+                            ><span>00</span><span>06</span><span>12</span
+                            ><span>18</span><span>24</span></div
+                        >
+                        <fieldset class="timeline-group">
+                            <legend class="sr-only"
+                                >Recording segments by time</legend
+                            >
+                            <div
+                                id="history-timeline"
+                                class="timeline-track"
+                            ></div>
+                        </fieldset>
+                        <p
+                            id="history-status"
+                            class="muted"
+                            aria-live="polite"
+                            >Loading today’s recording index…</p
+                        >
+                        <ol
+                            id="history-list"
+                            class="segment-list"
+                            aria-label="Recording segments"
+                        ></ol>
+                    </article>
+                </div>
+            </section>
 
-            <div class="app-settings-fields">
-              <label>
-                Preview cache budget
-                <span class="field-with-unit"><input id="cache-size-gib" type="number" min="0.125" max="128" step="0.125" required /><span>GiB</span></span>
-                <small>Generated browser previews are evicted least-recently-used when this budget is exceeded.</small>
-              </label>
-              <label>
-                Maximum cached previews
-                <input id="cache-max-entries" type="number" min="1" max="512" step="1" required />
-                <small>The byte budget remains the primary limit; this also caps small files.</small>
-              </label>
-              <label>
-                Default rewind window
-                <select id="rewind-window-setting">
-                  <option value="60">1 minute</option>
-                  <option value="120">2 minutes</option>
-                  <option value="300">5 minutes</option>
-                  <option value="600">10 minutes</option>
-                </select>
-                <small>Short windows start faster and make scrubbing more responsive.</small>
-              </label>
-              <label>
-                Rewind video codec
-                <select id="preview-video-codec-setting">
-                  <option value="auto">Auto · prefer native HEVC</option>
-                  <option value="hevc">Native HEVC · fastest</option>
-                  <option value="h264">H.264 · most compatible</option>
-                </select>
-                <small id="native-hevc-status">Checking this browser’s native HEVC decoder…</small>
-              </label>
-              <label class="toggle settings-toggle">
-                <input id="continue-playback-setting" type="checkbox" />
-                <span><strong>Continue rewind automatically</strong><small>Open the next window when the current one ends.</small></span>
-              </label>
-            </div>
+            <section
+                id="panel-timelapse"
+                class="timelapse section-block tab-panel"
+                role="tabpanel"
+                aria-labelledby="tab-timelapse"
+                aria-busy="false"
+                hidden
+            >
+                <div class="section-heading">
+                    <div>
+                        <p class="eyebrow violet"
+                            ><span
+                                class="nf"
+                                aria-hidden="true"
+                                >󰔚</span
+                            >
+                            INTERVAL CAPTURE</p
+                        >
+                        <h2 id="timelapse-title">Time-lapse</h2>
+                        <p class="section-copy"
+                            >Preview progress or adjust the camera schedule.</p
+                        >
+                    </div>
+                    <output
+                        id="timelapse-state"
+                        class="status pending violet-status"
+                        >Loading schedule</output
+                    >
+                </div>
 
-            <div class="form-actions settings-actions">
-              <p id="app-settings-status" class="muted" aria-live="polite">Loading saved preferences…</p>
-              <button id="save-app-settings" type="submit"><span class="nf" aria-hidden="true"></span> Save settings</button>
-            </div>
-          </form>
+                <div class="timelapse-grid">
+                    <article class="progress-card card">
+                        <p class="card-label violet">Current schedule</p>
+                        <strong id="timelapse-progress-label">—</strong>
+                        <progress
+                            id="timelapse-progress"
+                            max="100"
+                            value="0"
+                            >0%</progress
+                        >
+                        <div class="progress-meta">
+                            <span id="timelapse-captures">— captures</span>
+                            <span id="timelapse-dates">—</span>
+                        </div>
+                        <p
+                            id="timelapse-interval"
+                            class="muted"
+                            >Loading capture interval…</p
+                        >
+                    </article>
 
-          <article class="card cache-card">
-            <div class="card-heading">
-              <div>
-                <p class="card-label green"><span class="nf" aria-hidden="true"></span> Generated media</p>
-                <h3>Preview cache</h3>
-              </div>
-              <span id="cache-busy" class="file-state">Ready</span>
-            </div>
-            <div class="cache-usage-heading">
-              <strong id="cache-used">—</strong>
-              <span id="cache-limit">of —</span>
-            </div>
-            <progress id="cache-usage" max="1" value="0">0%</progress>
-            <dl class="cache-details">
-              <dt>Cached previews</dt><dd id="cache-entry-count">—</dd>
-              <dt>Policy</dt><dd>LRU eviction</dd>
-              <dt>Storage</dt><dd>Local PC only</dd>
-            </dl>
-            <p class="cache-explainer">Clearing this cache removes only generated MP4 previews. Camera recordings and time-lapse files are never touched.</p>
-            <button id="show-clear-cache" class="danger-button" type="button"><span class="nf" aria-hidden="true"></span> Clear generated previews</button>
-          </article>
-        </div>
-      </section>
-    </main>
+                    <article class="preview-card card">
+                        <div class="card-heading">
+                            <div>
+                                <p class="card-label violet"
+                                    >Progress preview</p
+                                >
+                                <strong id="preview-title"
+                                    >No preview loaded</strong
+                                >
+                            </div>
+                            <button
+                                id="preview-latest"
+                                class="violet-button"
+                                type="button"
+                                disabled
+                                ><span
+                                    class="nf"
+                                    aria-hidden="true"
+                                    ></span
+                                >
+                                Preview latest</button
+                            >
+                        </div>
+                        <div class="video-stage preview-stage">
+                            <video
+                                id="timelapse-preview"
+                                controls
+                                playsinline
+                                preload="auto"
+                            ></video>
+                            <p id="preview-placeholder"
+                                ><span
+                                    class="nf stage-icon"
+                                    aria-hidden="true"
+                                    >󰔚</span
+                                >Preview every frame captured so far.</p
+                            >
+                        </div>
+                        <div class="player-footer">
+                            <p
+                                id="preview-status"
+                                class="muted"
+                                aria-live="polite"
+                                >Preview is read-only.</p
+                            >
+                            <div class="preview-actions">
+                                <label
+                                    class="playback-speed"
+                                    for="timelapse-speed"
+                                >
+                                    <span>Speed</span>
+                                    <select id="timelapse-speed">
+                                        <option value="0.1">0.1×</option>
+                                        <option value="0.25">0.25×</option>
+                                        <option value="0.5">0.5×</option>
+                                        <option
+                                            value="1"
+                                            selected
+                                            >1×</option
+                                        >
+                                        <option value="2">2×</option>
+                                        <option value="4">4×</option>
+                                        <option value="8">8×</option>
+                                    </select>
+                                </label>
+                                <a
+                                    id="save-preview"
+                                    class="icon-link violet-link"
+                                    href="#"
+                                    hidden
+                                    ><span
+                                        class="nf"
+                                        aria-hidden="true"
+                                        ></span
+                                    >
+                                    Save preview</a
+                                >
+                            </div>
+                        </div>
+                    </article>
+                </div>
 
-    <dialog id="confirm-dialog">
-      <form method="dialog" class="dialog-card">
-        <p class="eyebrow"><span class="nf" aria-hidden="true"></span> CONFIRM CAMERA CHANGE</p>
-        <h2>Apply this schedule?</h2>
-        <p class="dialog-warning">Changing an active schedule may close its current timelapse file and begin a new one.</p>
-        <dl id="change-summary"></dl>
-        <div class="dialog-actions">
-          <button value="cancel" type="submit">Cancel</button>
-          <button id="apply-settings" value="default" type="button"><span class="nf" aria-hidden="true"></span> Apply to camera</button>
-        </div>
-      </form>
-    </dialog>
+                <div class="timelapse-lower">
+                    <form
+                        id="timelapse-form"
+                        class="settings-card card"
+                    >
+                        <div class="card-heading">
+                            <div>
+                                <p class="card-label"
+                                    ><span
+                                        class="nf"
+                                        aria-hidden="true"
+                                        ></span
+                                    >
+                                    Camera schedule</p
+                                >
+                                <h3>Capture settings</h3>
+                            </div>
+                            <label class="toggle">
+                                <input
+                                    id="timelapse-enabled"
+                                    name="enabled"
+                                    type="checkbox"
+                                />
+                                <span>Enabled</span>
+                            </label>
+                        </div>
 
-    <dialog id="cache-clear-dialog">
-      <form method="dialog" class="dialog-card">
-        <p class="eyebrow amber"><span class="nf" aria-hidden="true"></span> CLEAR LOCAL CACHE</p>
-        <h2>Remove generated previews?</h2>
-        <p class="dialog-warning">The previews can be rebuilt, but the next playback request may take longer. Files stored on the camera are unaffected.</p>
-        <div class="dialog-actions cache-dialog-actions">
-          <button value="cancel" type="submit">Cancel</button>
-          <button id="clear-cache" class="danger-button" value="default" type="button"><span class="nf" aria-hidden="true"></span> Clear cache</button>
-        </div>
-      </form>
-    </dialog>
+                        <div class="form-grid">
+                            <label>
+                                Interval (seconds)
+                                <input
+                                    id="timelapse-interval-seconds"
+                                    name="intervalSeconds"
+                                    type="number"
+                                    min="1"
+                                    max="86400"
+                                    required
+                                />
+                            </label>
+                            <label>
+                                Start
+                                <input
+                                    id="timelapse-start"
+                                    name="startTime"
+                                    type="datetime-local"
+                                    step="1"
+                                    required
+                                />
+                            </label>
+                            <label>
+                                End
+                                <input
+                                    id="timelapse-end"
+                                    name="endTime"
+                                    type="datetime-local"
+                                    step="1"
+                                    required
+                                />
+                            </label>
+                            <fieldset>
+                                <legend>Daily capture window</legend>
+                                <div class="time-range">
+                                    <label
+                                        >From<input
+                                            id="timelapse-daily-start"
+                                            name="dailyStart"
+                                            type="time"
+                                            step="1"
+                                            required
+                                    /></label>
+                                    <span aria-hidden="true">→</span>
+                                    <label
+                                        >To<input
+                                            id="timelapse-daily-end"
+                                            name="dailyEnd"
+                                            type="time"
+                                            step="1"
+                                            required
+                                    /></label>
+                                </div>
+                            </fieldset>
+                        </div>
 
-    <script src="/app.js" defer></script>
-  </body>
+                        <div class="form-actions">
+                            <p
+                                id="settings-status"
+                                class="muted"
+                                aria-live="polite"
+                                >Changes require a review before they reach the
+                                camera.</p
+                            >
+                            <button
+                                id="review-settings"
+                                type="submit"
+                                ><span
+                                    class="nf"
+                                    aria-hidden="true"
+                                    ></span
+                                >
+                                Review changes</button
+                            >
+                        </div>
+                    </form>
+
+                    <article class="timelapse-files card">
+                        <div class="card-heading">
+                            <div>
+                                <p class="card-label violet"
+                                    ><span
+                                        class="nf"
+                                        aria-hidden="true"
+                                        ></span
+                                    >
+                                    TIME-LAPSE FILES</p
+                                >
+                                <h3>Reserved storage</h3>
+                            </div>
+                            <button
+                                id="refresh-timelapse"
+                                class="compact"
+                                type="button"
+                                ><span
+                                    class="nf"
+                                    aria-hidden="true"
+                                    ></span
+                                >
+                                Refresh</button
+                            >
+                        </div>
+                        <p
+                            id="timelapse-file-status"
+                            class="muted"
+                            >Loading timelapse recordings…</p
+                        >
+                        <div class="table-wrap">
+                            <table>
+                                <thead
+                                    ><tr
+                                        ><th>Status</th><th>Captured through</th
+                                        ><th>Size</th><th>Actions</th></tr
+                                    ></thead
+                                >
+                                <tbody id="timelapse-list"></tbody>
+                            </table>
+                        </div>
+                    </article>
+                </div>
+            </section>
+
+            <section
+                id="panel-files"
+                class="files section-block tab-panel"
+                role="tabpanel"
+                aria-labelledby="tab-files"
+                aria-busy="false"
+                hidden
+            >
+                <div class="section-heading">
+                    <div>
+                        <p class="eyebrow green"
+                            ><span
+                                class="nf"
+                                aria-hidden="true"
+                                ></span
+                            >
+                            CAMERA STORAGE</p
+                        >
+                        <h2>File browser</h2>
+                        <p class="section-copy"
+                            >Find and download closed recordings from both
+                            camera partitions.</p
+                        >
+                    </div>
+                    <label class="date-control files-date">
+                        <span>Day</span>
+                        <input
+                            id="files-date"
+                            type="date"
+                        />
+                    </label>
+                </div>
+
+                <article class="file-browser card">
+                    <div class="file-toolbar">
+                        <label class="file-search">
+                            <span
+                                class="nf"
+                                aria-hidden="true"
+                                ></span
+                            >
+                            <span class="sr-only">Search camera files</span>
+                            <input
+                                id="files-search"
+                                type="search"
+                                placeholder="Search files"
+                                autocomplete="off"
+                            />
+                        </label>
+                        <label>
+                            <span class="sr-only">File type</span>
+                            <select id="files-kind">
+                                <option value="all">All files</option>
+                                <option value="recording">Recordings</option>
+                                <option value="timelapse">Time-lapses</option>
+                            </select>
+                        </label>
+                        <label>
+                            <span class="sr-only">Sort files</span>
+                            <select id="files-sort">
+                                <option value="newest">Newest first</option>
+                                <option value="oldest">Oldest first</option>
+                                <option value="largest">Largest first</option>
+                            </select>
+                        </label>
+                        <button
+                            id="files-refresh"
+                            class="compact green-button"
+                            type="button"
+                            ><span
+                                class="nf"
+                                aria-hidden="true"
+                                ></span
+                            >
+                            Refresh</button
+                        >
+                    </div>
+
+                    <div
+                        class="file-summary"
+                        aria-live="polite"
+                    >
+                        <strong id="files-count">— files</strong>
+                        <span id="files-breakdown">—</span>
+                        <span id="files-size">—</span>
+                    </div>
+
+                    <div class="table-wrap file-table-wrap">
+                        <table class="file-table">
+                            <thead
+                                ><tr
+                                    ><th>Type</th><th>Started</th
+                                    ><th>Duration</th><th>Size</th
+                                    ><th>Status</th><th>Action</th></tr
+                                ></thead
+                            >
+                            <tbody id="files-list"></tbody>
+                        </table>
+                    </div>
+                    <p
+                        id="files-status"
+                        class="empty-state muted"
+                        aria-live="polite"
+                        >Loading camera files…</p
+                    >
+                </article>
+            </section>
+
+            <section
+                id="panel-settings"
+                class="app-settings section-block tab-panel"
+                role="tabpanel"
+                aria-labelledby="tab-settings"
+                aria-busy="false"
+                hidden
+            >
+                <div class="section-heading">
+                    <div>
+                        <p class="eyebrow blue"
+                            ><span
+                                class="nf"
+                                aria-hidden="true"
+                                ></span
+                            >
+                            LOCAL PREFERENCES</p
+                        >
+                        <h2>Application settings</h2>
+                        <p class="section-copy"
+                            >Control generated preview storage and daily rewind
+                            behavior. These preferences stay on this PC.</p
+                        >
+                    </div>
+                    <output
+                        id="app-settings-state"
+                        class="status pending"
+                        >Loading settings</output
+                    >
+                </div>
+
+                <div class="app-settings-grid">
+                    <form
+                        id="app-settings-form"
+                        class="card app-settings-card"
+                    >
+                        <div class="card-heading">
+                            <div>
+                                <p class="card-label"
+                                    ><span
+                                        class="nf"
+                                        aria-hidden="true"
+                                        >󰒓</span
+                                    >
+                                    Interface defaults</p
+                                >
+                                <h3>Playback and cache</h3>
+                            </div>
+                            <span class="settings-saved"
+                                ><span
+                                    class="nf"
+                                    aria-hidden="true"
+                                    >󰆓</span
+                                >
+                                JSON backed</span
+                            >
+                        </div>
+
+                        <div class="app-settings-fields">
+                            <label>
+                                Preview cache budget
+                                <span class="field-with-unit"
+                                    ><input
+                                        id="cache-size-gib"
+                                        type="number"
+                                        min="0.125"
+                                        max="128"
+                                        step="0.125"
+                                        required
+                                    /><span>GiB</span></span
+                                >
+                                <small
+                                    >Generated browser previews are evicted
+                                    least-recently-used when this budget is
+                                    exceeded.</small
+                                >
+                            </label>
+                            <label>
+                                Maximum cached previews
+                                <input
+                                    id="cache-max-entries"
+                                    type="number"
+                                    min="1"
+                                    max="512"
+                                    step="1"
+                                    required
+                                />
+                                <small
+                                    >The byte budget remains the primary limit;
+                                    this also caps small files.</small
+                                >
+                            </label>
+                            <label>
+                                Default rewind window
+                                <select id="rewind-window-setting">
+                                    <option value="60">1 minute</option>
+                                    <option value="120">2 minutes</option>
+                                    <option value="300">5 minutes</option>
+                                    <option value="600">10 minutes</option>
+                                </select>
+                                <small
+                                    >Short windows start faster and make
+                                    scrubbing more responsive.</small
+                                >
+                            </label>
+                            <label>
+                                Rewind video codec
+                                <select id="preview-video-codec-setting">
+                                    <option value="auto"
+                                        >Auto · prefer native HEVC</option
+                                    >
+                                    <option value="hevc"
+                                        >Native HEVC · fastest</option
+                                    >
+                                    <option value="h264"
+                                        >H.264 · most compatible</option
+                                    >
+                                </select>
+                                <small id="native-hevc-status"
+                                    >Checking this browser’s native HEVC
+                                    decoder…</small
+                                >
+                            </label>
+                            <label class="toggle settings-toggle">
+                                <input
+                                    id="continue-playback-setting"
+                                    type="checkbox"
+                                />
+                                <span
+                                    ><strong
+                                        >Continue rewind automatically</strong
+                                    ><small
+                                        >Open the next window when the current
+                                        one ends.</small
+                                    ></span
+                                >
+                            </label>
+                        </div>
+
+                        <div class="form-actions settings-actions">
+                            <p
+                                id="app-settings-status"
+                                class="muted"
+                                aria-live="polite"
+                                >Loading saved preferences…</p
+                            >
+                            <button
+                                id="save-app-settings"
+                                type="submit"
+                                ><span
+                                    class="nf"
+                                    aria-hidden="true"
+                                    ></span
+                                >
+                                Save settings</button
+                            >
+                        </div>
+                    </form>
+
+                    <article class="card cache-card">
+                        <div class="card-heading">
+                            <div>
+                                <p class="card-label green"
+                                    ><span
+                                        class="nf"
+                                        aria-hidden="true"
+                                        ></span
+                                    >
+                                    Generated media</p
+                                >
+                                <h3>Preview cache</h3>
+                            </div>
+                            <span
+                                id="cache-busy"
+                                class="file-state"
+                                >Ready</span
+                            >
+                        </div>
+                        <div class="cache-usage-heading">
+                            <strong id="cache-used">—</strong>
+                            <span id="cache-limit">of —</span>
+                        </div>
+                        <progress
+                            id="cache-usage"
+                            max="1"
+                            value="0"
+                            >0%</progress
+                        >
+                        <dl class="cache-details">
+                            <dt>Cached previews</dt
+                            ><dd id="cache-entry-count">—</dd> <dt>Policy</dt
+                            ><dd>LRU eviction</dd> <dt>Storage</dt
+                            ><dd>Local PC only</dd>
+                        </dl>
+                        <p class="cache-explainer"
+                            >Clearing this cache removes only generated MP4
+                            previews. Camera recordings and time-lapse files are
+                            never touched.</p
+                        >
+                        <button
+                            id="show-clear-cache"
+                            class="danger-button"
+                            type="button"
+                            ><span
+                                class="nf"
+                                aria-hidden="true"
+                                ></span
+                            >
+                            Clear generated previews</button
+                        >
+                    </article>
+                </div>
+            </section>
+        </main>
+
+        <dialog id="confirm-dialog">
+            <form
+                method="dialog"
+                class="dialog-card"
+            >
+                <p class="eyebrow"
+                    ><span
+                        class="nf"
+                        aria-hidden="true"
+                        ></span
+                    >
+                    CONFIRM CAMERA CHANGE</p
+                >
+                <h2>Apply this schedule?</h2>
+                <p class="dialog-warning"
+                    >Changing an active schedule may close its current timelapse
+                    file and begin a new one.</p
+                >
+                <dl id="change-summary"></dl>
+                <div class="dialog-actions">
+                    <button
+                        value="cancel"
+                        type="submit"
+                        >Cancel</button
+                    >
+                    <button
+                        id="apply-settings"
+                        value="default"
+                        type="button"
+                        ><span
+                            class="nf"
+                            aria-hidden="true"
+                            ></span
+                        >
+                        Apply to camera</button
+                    >
+                </div>
+            </form>
+        </dialog>
+
+        <dialog id="cache-clear-dialog">
+            <form
+                method="dialog"
+                class="dialog-card"
+            >
+                <p class="eyebrow amber"
+                    ><span
+                        class="nf"
+                        aria-hidden="true"
+                        ></span
+                    >
+                    CLEAR LOCAL CACHE</p
+                >
+                <h2>Remove generated previews?</h2>
+                <p class="dialog-warning"
+                    >The previews can be rebuilt, but the next playback request
+                    may take longer. Files stored on the camera are
+                    unaffected.</p
+                >
+                <div class="dialog-actions cache-dialog-actions">
+                    <button
+                        value="cancel"
+                        type="submit"
+                        >Cancel</button
+                    >
+                    <button
+                        id="clear-cache"
+                        class="danger-button"
+                        value="default"
+                        type="button"
+                        ><span
+                            class="nf"
+                            aria-hidden="true"
+                            ></span
+                        >
+                        Clear cache</button
+                    >
+                </div>
+            </form>
+        </dialog>
+
+        <script
+            src="/app.js"
+            defer
+        ></script>
+    </body>
 </html>
