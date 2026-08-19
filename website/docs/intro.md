@@ -4,10 +4,10 @@ slug: /
 title: VIVOSUN GrowCam C4 desktop viewer
 description: Use GrowCam PC as a private local viewer, daily rewind, and time-lapse dashboard for the VIVOSUN GrowCam C4.
 keywords:
-  - VIVOSUN GrowCam C4
-  - GrowCam C4 PC viewer
-  - GrowCam time-lapse
-  - GrowCam rewind
+ - VIVOSUN GrowCam C4
+ - GrowCam C4 PC viewer
+ - GrowCam time-lapse
+ - GrowCam rewind
 ---
 
 # VIVOSUN GrowCam C4 desktop viewer

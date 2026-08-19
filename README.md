@@ -204,11 +204,11 @@ The Settings tab persists the following choices outside the package install:
 Settings use optimistic revisions, so a stale tab cannot silently overwrite a
 newer save. Their platform locations are:
 
-| Platform | Settings file |
-| --- | --- |
-| Windows | `%LOCALAPPDATA%\GrowCam\settings.json` |
-| macOS | `~/Library/Application Support/GrowCam/settings.json` |
-| Linux | `$XDG_CONFIG_HOME/growcam/settings.json` or `~/.config/growcam/settings.json` |
+| Platform | Settings file                                                                 |
+| -------- | ----------------------------------------------------------------------------- |
+| Windows  | `%LOCALAPPDATA%\GrowCam\settings.json`                                        |
+| macOS    | `~/Library/Application Support/GrowCam/settings.json`                         |
+| Linux    | `$XDG_CONFIG_HOME/growcam/settings.json` or `~/.config/growcam/settings.json` |
 
 ## How progressive previews work
 
@@ -254,11 +254,11 @@ supports it; H.264 remains the portable fallback.
 
 Preview cache locations:
 
-| Platform | Directory |
-| --- | --- |
-| Windows | `%LOCALAPPDATA%\GrowCam\preview-cache` |
-| macOS | `~/Library/Caches/GrowCam/preview-cache` |
-| Linux | `$XDG_CACHE_HOME/growcam/preview-cache` or `~/.cache/growcam/preview-cache` |
+| Platform | Directory                                                                   |
+| -------- | --------------------------------------------------------------------------- |
+| Windows  | `%LOCALAPPDATA%\GrowCam\preview-cache`                                      |
+| macOS    | `~/Library/Caches/GrowCam/preview-cache`                                    |
+| Linux    | `$XDG_CACHE_HOME/growcam/preview-cache` or `~/.cache/growcam/preview-cache` |
 
 The default cache allows 24 previews and 4 GiB, evicting least-recently-used
 files when either limit is reached. Both limits are configurable in Settings.

@@ -51,18 +51,18 @@ The Settings view stores application preferences in a revisioned local JSON file
 
 Auto mode uses native HEVC only when the browser advertises HEVC-in-MP4 playback. H.264 is the compatible fallback. Native HEVC skips video transcoding, while recorded audio is still converted to AAC.
 
-| Platform | Settings file |
-| --- | --- |
-| Windows | `%LOCALAPPDATA%\GrowCam\settings.json` |
-| macOS | `~/Library/Application Support/GrowCam/settings.json` |
-| Linux | `$XDG_CONFIG_HOME/growcam/settings.json` or `~/.config/growcam/settings.json` |
+| Platform | Settings file                                                                 |
+| -------- | ----------------------------------------------------------------------------- |
+| Windows  | `%LOCALAPPDATA%\GrowCam\settings.json`                                        |
+| macOS    | `~/Library/Application Support/GrowCam/settings.json`                         |
+| Linux    | `$XDG_CONFIG_HOME/growcam/settings.json` or `~/.config/growcam/settings.json` |
 
 ## Preview cache
 
-| Platform | Directory |
-| --- | --- |
-| Windows | `%LOCALAPPDATA%\GrowCam\preview-cache` |
-| macOS | `~/Library/Caches/GrowCam/preview-cache` |
-| Linux | `$XDG_CACHE_HOME/growcam/preview-cache` or `~/.cache/growcam/preview-cache` |
+| Platform | Directory                                                                   |
+| -------- | --------------------------------------------------------------------------- |
+| Windows  | `%LOCALAPPDATA%\GrowCam\preview-cache`                                      |
+| macOS    | `~/Library/Caches/GrowCam/preview-cache`                                    |
+| Linux    | `$XDG_CACHE_HOME/growcam/preview-cache` or `~/.cache/growcam/preview-cache` |
 
 The default cache permits 24 MP4 previews and 4 GiB. Least-recently-used files are evicted when either limit is reached, and both limits can be changed in Settings.

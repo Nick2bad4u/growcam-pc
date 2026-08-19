@@ -1,119 +1,154 @@
 import { themes as prismThemes } from "prism-react-renderer";
 
-/** @type {import('@docusaurus/types').Config} */
+const yearFormatter = new Intl.DateTimeFormat("en", {
+    year: "numeric",
+});
+const currentYear = yearFormatter.format();
+
+/** @type {import("@docusaurus/types").Config} */
 const config = {
-  title: "GrowCam PC",
-  tagline: "A local desktop dashboard for the VIVOSUN GrowCam C4",
-  favicon: "img/growcam-mark.svg",
-  url: "https://nick2bad4u.github.io",
-  baseUrl: "/growcam-pc/",
-  organizationName: "Nick2bad4u",
-  projectName: "growcam-pc",
-  trailingSlash: false,
-  onBrokenLinks: "throw",
-  i18n: {
-    defaultLocale: "en",
-    locales: ["en"],
-  },
-  presets: [
-    [
-      "classic",
-      {
-        docs: {
-          sidebarPath: "./sidebars.mjs",
-          editUrl: "https://github.com/Nick2bad4u/growcam-pc/edit/main/website/",
-          showLastUpdateTime: true,
-        },
-        blog: false,
-        sitemap: {
-          changefreq: "weekly",
-          priority: 0.7,
-        },
-        theme: {
-          customCss: "./src/css/custom.css",
-        },
-      },
+    baseUrl: "/growcam-pc/",
+    favicon: "img/growcam-mark.svg",
+    i18n: {
+        defaultLocale: "en",
+        locales: ["en"],
+    },
+    onBrokenLinks: "throw",
+    organizationName: "Nick2bad4u",
+    presets: [
+        [
+            "classic",
+            {
+                blog: false,
+                docs: {
+                    editUrl:
+                        "https://github.com/Nick2bad4u/growcam-pc/edit/main/website/",
+                    showLastUpdateTime: true,
+                    sidebarPath: "./sidebars.mjs",
+                },
+                sitemap: {
+                    changefreq: "weekly",
+                    priority: 0.7,
+                },
+                theme: {
+                    customCss: "./src/css/custom.css",
+                },
+            },
+        ],
     ],
-  ],
-  themeConfig: {
-    metadata: [
-      { name: "theme-color", content: "#071418" },
-      {
-        name: "description",
-        content: "Open-source VIVOSUN GrowCam C4 desktop viewer with local live video, 24-hour rewind, time-lapse previews, and camera file downloads.",
-      },
-      {
-        name: "keywords",
-        content: "VIVOSUN GrowCam C4, GrowCam C4 PC viewer, GrowCam time-lapse, GrowCam rewind, RTSP camera viewer",
-      },
-      { name: "application-name", content: "GrowCam PC" },
-      { property: "og:type", content: "website" },
-      { property: "og:site_name", content: "GrowCam PC" },
-      { name: "twitter:card", content: "summary" },
-    ],
-    colorMode: {
-      defaultMode: "dark",
-      respectPrefersColorScheme: true,
+    projectName: "growcam-pc",
+    tagline: "A local desktop dashboard for the VIVOSUN GrowCam C4",
+    themeConfig: {
+        colorMode: {
+            defaultMode: "dark",
+            respectPrefersColorScheme: true,
+        },
+        footer: {
+            copyright: `Copyright © ${currentYear} Nick2bad4u. Built with Docusaurus.`,
+            links: [
+                {
+                    items: [
+                        {
+                            label: "GrowCam C4 setup",
+                            to: "/docs/growcam-c4-setup",
+                        },
+                        { label: "Install", to: "/docs/getting-started" },
+                        { label: "Dashboard", to: "/docs/dashboard" },
+                        { label: "CLI", to: "/docs/cli" },
+                    ],
+                    title: "Use GrowCam PC",
+                },
+                {
+                    items: [
+                        {
+                            label: "Troubleshooting",
+                            to: "/docs/troubleshooting",
+                        },
+                        { label: "Security", to: "/docs/security" },
+                        {
+                            href: "https://github.com/Nick2bad4u/growcam-pc/issues",
+                            label: "Issues",
+                        },
+                    ],
+                    title: "Support",
+                },
+                {
+                    items: [
+                        {
+                            href: "https://github.com/Nick2bad4u/growcam-pc",
+                            label: "GitHub",
+                        },
+                        {
+                            href: "https://github.com/Nick2bad4u/growcam-pc/blob/main/CHANGELOG.md",
+                            label: "Changelog",
+                        },
+                        {
+                            href: "https://github.com/Nick2bad4u/growcam-pc/blob/main/LICENSE",
+                            label: "MIT License",
+                        },
+                    ],
+                    title: "Project",
+                },
+            ],
+            style: "dark",
+        },
+        metadata: [
+            { content: "#071418", name: "theme-color" },
+            {
+                content:
+                    "Open-source VIVOSUN GrowCam C4 desktop viewer with local live video, 24-hour rewind, time-lapse previews, and camera file downloads.",
+                name: "description",
+            },
+            {
+                content:
+                    "VIVOSUN GrowCam C4, GrowCam C4 PC viewer, GrowCam time-lapse, GrowCam rewind, RTSP camera viewer",
+                name: "keywords",
+            },
+            { content: "GrowCam PC", name: "application-name" },
+            { content: "website", property: "og:type" },
+            { content: "GrowCam PC", property: "og:site_name" },
+            { content: "summary", name: "twitter:card" },
+        ],
+        navbar: {
+            items: [
+                {
+                    label: "Guide",
+                    position: "left",
+                    sidebarId: "guideSidebar",
+                    type: "docSidebar",
+                },
+                {
+                    label: "GrowCam C4 setup",
+                    position: "left",
+                    to: "/docs/growcam-c4-setup",
+                },
+                { label: "Dashboard", position: "left", to: "/docs/dashboard" },
+                {
+                    href: "https://pypi.org/project/growcam-pc/",
+                    label: "PyPI",
+                    position: "right",
+                },
+                {
+                    href: "https://github.com/Nick2bad4u/growcam-pc",
+                    label: "GitHub",
+                    position: "right",
+                },
+            ],
+            logo: {
+                alt: "GrowCam PC logo",
+                src: "img/growcam-mark.svg",
+            },
+            title: "GrowCam PC",
+        },
+        prism: {
+            additionalLanguages: ["bash", "powershell"],
+            darkTheme: prismThemes.dracula,
+            theme: prismThemes.github,
+        },
     },
-    navbar: {
-      title: "GrowCam PC",
-      logo: {
-        alt: "GrowCam PC logo",
-        src: "img/growcam-mark.svg",
-      },
-      items: [
-        { type: "docSidebar", sidebarId: "guideSidebar", position: "left", label: "Guide" },
-        { to: "/docs/growcam-c4-setup", label: "GrowCam C4 setup", position: "left" },
-        { to: "/docs/dashboard", label: "Dashboard", position: "left" },
-        {
-          href: "https://pypi.org/project/growcam-pc/",
-          label: "PyPI",
-          position: "right",
-        },
-        {
-          href: "https://github.com/Nick2bad4u/growcam-pc",
-          label: "GitHub",
-          position: "right",
-        },
-      ],
-    },
-    footer: {
-      style: "dark",
-      links: [
-        {
-          title: "Use GrowCam PC",
-          items: [
-            { label: "GrowCam C4 setup", to: "/docs/growcam-c4-setup" },
-            { label: "Install", to: "/docs/getting-started" },
-            { label: "Dashboard", to: "/docs/dashboard" },
-            { label: "CLI", to: "/docs/cli" },
-          ],
-        },
-        {
-          title: "Support",
-          items: [
-            { label: "Troubleshooting", to: "/docs/troubleshooting" },
-            { label: "Security", to: "/docs/security" },
-            { label: "Issues", href: "https://github.com/Nick2bad4u/growcam-pc/issues" },
-          ],
-        },
-        {
-          title: "Project",
-          items: [
-            { label: "GitHub", href: "https://github.com/Nick2bad4u/growcam-pc" },
-            { label: "Changelog", href: "https://github.com/Nick2bad4u/growcam-pc/blob/main/CHANGELOG.md" },
-            { label: "MIT License", href: "https://github.com/Nick2bad4u/growcam-pc/blob/main/LICENSE" },
-          ],
-        },
-      ],
-      copyright: `Copyright © ${new Date().getFullYear()} Nick2bad4u. Built with Docusaurus.`,
-    },
-    prism: {
-      theme: prismThemes.github,
-      darkTheme: prismThemes.dracula,
-      additionalLanguages: ["bash", "powershell"],
-    },
-  },
+    title: "GrowCam PC",
+    trailingSlash: false,
+    url: "https://nick2bad4u.github.io",
 };
 
 export default config;

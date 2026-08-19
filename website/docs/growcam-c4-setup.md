@@ -4,11 +4,11 @@ slug: /growcam-c4-setup
 title: VIVOSUN GrowCam C4 setup and compatibility
 description: Connect a VIVOSUN GrowCam C4 to a Windows, macOS, or Linux PC for local live video, daily rewind, and time-lapse previews.
 keywords:
-  - VIVOSUN GrowCam C4 setup
-  - GrowCam C4 PC viewer
-  - GrowCam C4 RTSP
-  - GrowCam C4 time-lapse
-  - GrowCam C4 recordings
+ - VIVOSUN GrowCam C4 setup
+ - GrowCam C4 PC viewer
+ - GrowCam C4 RTSP
+ - GrowCam C4 time-lapse
+ - GrowCam C4 recordings
 ---
 
 # VIVOSUN GrowCam C4 setup and compatibility
@@ -20,14 +20,14 @@ a hosted GrowCam PC service.
 
 ## Supported GrowCam C4 features
 
-| Feature | Local camera source |
-| --- | --- |
-| Live video, audio, and snapshots | RTSP on TCP port `554` |
-| Device and storage status | DVRIP on TCP port `34567` |
-| Full-day rewind | Continuous recordings on the main microSD partition |
-| Time-lapse progress preview | Native captures on the reserved time-lapse partition |
-| Camera file browser | Combined recording and time-lapse indexes |
-| Playable downloads | Local conversion to standard Matroska video |
+| Feature                          | Local camera source                                  |
+| -------------------------------- | ---------------------------------------------------- |
+| Live video, audio, and snapshots | RTSP on TCP port `554`                               |
+| Device and storage status        | DVRIP on TCP port `34567`                            |
+| Full-day rewind                  | Continuous recordings on the main microSD partition  |
+| Time-lapse progress preview      | Native captures on the reserved time-lapse partition |
+| Camera file browser              | Combined recording and time-lapse indexes            |
+| Playable downloads               | Local conversion to standard Matroska video          |
 
 The VIVOSUN mobile app can remain installed, but it is not a relay or runtime
 dependency for the PC dashboard after the camera is configured on the LAN.
