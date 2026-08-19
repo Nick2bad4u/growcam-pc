@@ -1,5 +1,9 @@
 codecov:
     branch: "main"
+    # CI generates and explicitly uploads this report. Keep expiry disabled
+    # because Codecov can otherwise reject a fresh coverage.py timestamp as
+    # older than its default 12-hour window.
+    max_report_age: "off"
     require_ci_to_pass: true
 
 coverage:
