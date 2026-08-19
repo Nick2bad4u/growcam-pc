@@ -1,0 +1,2 @@
+# Codecov treats an unquoted `off` as a boolean-like disable sentinel.
+codecov.yml

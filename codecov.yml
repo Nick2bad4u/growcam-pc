@@ -1,10 +1,15 @@
+# Prettier would quote Codecov's boolean-like `off` sentinel and change its
+# meaning, so this file is intentionally listed in .prettierignore.
 codecov:
     branch: "main"
     # CI generates and explicitly uploads this report. Keep expiry disabled
     # because Codecov can otherwise reject a fresh coverage.py timestamp as
     # older than its default 12-hour window.
-    max_report_age: "off"
+    max_report_age: off
     require_ci_to_pass: true
+    notify:
+        # Wait for the workflow conclusion before applying require_ci_to_pass.
+        wait_for_ci: true
 
 coverage:
     precision: 2
