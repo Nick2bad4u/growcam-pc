@@ -1,52 +1,52 @@
-name: Bug report
-description: Report reproducible GrowCam PC behavior.
+name: "Bug report"
+description: "Report reproducible GrowCam PC behavior."
 title: "[Bug]: "
 labels:
-  - bug
+    - "bug"
 body:
-  - type: markdown
-    attributes:
-      value: Do not include camera passwords, private addresses, serial numbers, or recordings.
-  - type: input
-    id: version
-    attributes:
-      label: GrowCam PC version
-      placeholder: Output from growcam --version
-    validations:
-      required: true
-  - type: dropdown
-    id: operating-system
-    attributes:
-      label: Operating system
-      options:
-        - Windows
-        - macOS
-        - Linux
-        - Other
-    validations:
-      required: true
-  - type: input
-    id: camera
-    attributes:
-      label: Camera model and firmware
-      description: Omit device-specific identifiers.
-      placeholder: VIVOSUN GrowCam C4, firmware version
-  - type: textarea
-    id: steps
-    attributes:
-      label: Reproduction steps
-      placeholder: Tell us exactly what you ran or clicked.
-    validations:
-      required: true
-  - type: textarea
-    id: expected
-    attributes:
-      label: Expected behavior
-    validations:
-      required: true
-  - type: textarea
-    id: actual
-    attributes:
-      label: Actual behavior and sanitized logs
-    validations:
-      required: true
+    - type: "markdown"
+      attributes:
+          value: "Do not include camera passwords, private addresses, serial numbers, or recordings."
+    - type: "input"
+      id: "version"
+      attributes:
+          label: "GrowCam PC version"
+          placeholder: "Output from growcam --version"
+      validations:
+          required: true
+    - type: "dropdown"
+      id: "operating-system"
+      attributes:
+          label: "Operating system"
+          options:
+              - "Windows"
+              - "macOS"
+              - "Linux"
+              - "Other"
+      validations:
+          required: true
+    - type: "input"
+      id: "camera"
+      attributes:
+          label: "Camera model and firmware"
+          description: "Omit device-specific identifiers."
+          placeholder: "VIVOSUN GrowCam C4, firmware version"
+    - type: "textarea"
+      id: "steps"
+      attributes:
+          label: "Reproduction steps"
+          placeholder: "Tell us exactly what you ran or clicked."
+      validations:
+          required: true
+    - type: "textarea"
+      id: "expected"
+      attributes:
+          label: "Expected behavior"
+      validations:
+          required: true
+    - type: "textarea"
+      id: "actual"
+      attributes:
+          label: "Actual behavior and sanitized logs"
+      validations:
+          required: true

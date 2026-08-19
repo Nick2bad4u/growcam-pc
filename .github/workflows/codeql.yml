@@ -1,0 +1,23 @@
+name: "CodeQL"
+
+on:
+    push:
+        branches:
+            - "main"
+    pull_request:
+        branches:
+            - "main"
+    schedule:
+        - cron: "23 7 * * 1"
+    workflow_dispatch:
+
+permissions:
+    contents: "read"
+    security-events: "write"
+
+jobs:
+    analyze:
+        uses: "Nick2bad4u/workflow-templates/.github/workflows/reusable-codeql-analysis-advanced.yml@main"
+        with:
+            languages: >-
+                ["javascript-typescript","python","actions"]

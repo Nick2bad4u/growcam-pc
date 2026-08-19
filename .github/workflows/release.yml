@@ -1,131 +1,131 @@
-name: Release
+name: "Release"
 
 on:
-  push:
-    tags:
-      - "v[0-9]*.[0-9]*.[0-9]*"
+    push:
+        tags:
+            - "v[0-9]*.[0-9]*.[0-9]*"
 
 jobs:
-  build:
-    name: Verify and build distributions
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    permissions:
-      contents: read
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
+    build:
+        name: "Verify and build distributions"
+        runs-on: "ubuntu-latest"
+        timeout-minutes: 25
+        permissions:
+            contents: "read"
+        steps:
+            - name: "Check out repository"
+              uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" # v7.0.1
+              with:
+                  fetch-depth: 0
+                  persist-credentials: false
 
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.11"
+            - name: "Set up Python"
+              uses: "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97" # v7.0.0
+              with:
+                  python-version: "3.11"
 
-      - name: Set up uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
-        with:
-          version: 0.11.26
+            - name: "Set up uv"
+              uses: "astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d" # v10.0.1
+              with:
+                  version: "0.11.26"
 
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "24"
-          cache: npm
+            - name: "Set up Node.js"
+              uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020" # v7.0.0
+              with:
+                  node-version: "24"
+                  cache: "npm"
 
-      - name: Install locked dependencies
-        run: |
-          uv sync --frozen --all-groups
-          npm ci --ignore-scripts
+            - name: "Install locked dependencies"
+              run: |
+                  uv sync --frozen --all-groups
+                  npm ci --ignore-scripts
 
-      - name: Verify release tag
-        shell: bash
-        run: |
-          package_version="$(uv run python -c 'from growcam import __version__; print(__version__)')"
-          test "v${package_version}" = "${GITHUB_REF_NAME}"
+            - name: "Verify release tag"
+              shell: "bash"
+              run: |
+                  package_version="$(uv run python -c 'from growcam import __version__; print(__version__)')"
+                  test "v${package_version}" = "${GITHUB_REF_NAME}"
 
-      - name: Validate release
-        run: npm run release:verify
+            - name: "Validate release"
+              run: "npm run release:verify"
 
-      - name: Upload distributions
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
-        with:
-          name: python-distributions
-          path: dist/*
-          if-no-files-found: error
-          retention-days: 14
+            - name: "Upload distributions"
+              uses: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" # v7.0.0
+              with:
+                  name: "python-distributions"
+                  path: "dist/*"
+                  if-no-files-found: "error"
+                  retention-days: 14
 
-  release:
-    name: Publish GitHub release
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: write
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
+    release:
+        name: "Publish GitHub release"
+        needs: "build"
+        runs-on: "ubuntu-latest"
+        timeout-minutes: 15
+        permissions:
+            contents: "write"
+        steps:
+            - name: "Check out repository"
+              uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" # v7.0.1
+              with:
+                  fetch-depth: 0
 
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "24"
-          cache: npm
+            - name: "Set up Node.js"
+              uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020" # v7.0.0
+              with:
+                  node-version: "24"
+                  cache: "npm"
 
-      - name: Install changelog tooling
-        run: npm ci --ignore-scripts
+            - name: "Install changelog tooling"
+              run: "npm ci --ignore-scripts"
 
-      - name: Generate release notes
-        run: |
-          mkdir -p .cache
-          npm run changelog:release-notes:file
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+            - name: "Generate release notes"
+              run: |
+                  mkdir -p .cache
+                  npm run changelog:release-notes:file
+              env:
+                  GITHUB_TOKEN: "${{ github.token }}"
 
-      - name: Download distributions
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: python-distributions
-          path: dist
+            - name: "Download distributions"
+              uses: "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c" # v8.0.1
+              with:
+                  name: "python-distributions"
+                  path: "dist"
 
-      - name: Create or update GitHub release
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release upload "${GITHUB_REF_NAME}" dist/* --clobber
-            gh release edit "${GITHUB_REF_NAME}" --notes-file .cache/release-notes.md --title "GrowCam PC ${GITHUB_REF_NAME}"
-          else
-            gh release create "${GITHUB_REF_NAME}" dist/* --verify-tag --notes-file .cache/release-notes.md --title "GrowCam PC ${GITHUB_REF_NAME}"
-          fi
+            - name: "Create or update GitHub release"
+              shell: "bash"
+              env:
+                  GH_TOKEN: "${{ github.token }}"
+              run: |
+                  if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+                    gh release upload "${GITHUB_REF_NAME}" dist/* --clobber
+                    gh release edit "${GITHUB_REF_NAME}" --notes-file .cache/release-notes.md --title "GrowCam PC ${GITHUB_REF_NAME}"
+                  else
+                    gh release create "${GITHUB_REF_NAME}" dist/* --verify-tag --notes-file .cache/release-notes.md --title "GrowCam PC ${GITHUB_REF_NAME}"
+                  fi
 
-  publish:
-    name: Publish to PyPI
-    needs:
-      - build
-      - release
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      id-token: write
-    environment:
-      name: pypi
-      url: https://pypi.org/project/growcam-pc/
-    steps:
-      - name: Download distributions
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: python-distributions
-          path: dist
+    publish:
+        name: "Publish to PyPI"
+        needs:
+            - "build"
+            - "release"
+        runs-on: "ubuntu-latest"
+        timeout-minutes: 10
+        permissions:
+            id-token: "write"
+        environment:
+            name: "pypi"
+            url: "https://pypi.org/project/growcam-pc/"
+        steps:
+            - name: "Download distributions"
+              uses: "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c" # v8.0.1
+              with:
+                  name: "python-distributions"
+                  path: "dist"
 
-      - name: Publish distributions
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
-        with:
-          packages-dir: dist/
-          skip-existing: true
-          verbose: true
+            - name: "Publish distributions"
+              uses: "pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33" # v1.14.2
+              with:
+                  packages-dir: "dist/"
+                  skip-existing: true
+                  verbose: true
