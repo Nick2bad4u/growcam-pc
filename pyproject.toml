@@ -4,7 +4,7 @@
 
 [project]
     name = "growcam-pc"
-    version = "1.2.1"
+    version = "1.3.0"
     description = "Local dashboard, daily rewind, and time-lapse tools for the VIVOSUN GrowCam C4"
     readme = "README.md"
     license = "MIT"

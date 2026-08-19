@@ -5,6 +5,32 @@ All notable changes to GrowCam PC are documented here. The project follows
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-08-19
+
+### Added
+
+- Add project-owned ESLint, Stylelint, Prettier, TypeScript, and npm package
+  metadata policies to the local, CI, and release gates.
+- Add CodeQL, dependency review, secret scanning, Dependabot auto-merge,
+  pull-request labeling, and stale-management automation.
+
+### Changed
+
+- Refresh the dashboard shell, navigation, media stages, settings, tables,
+  dialogs, status treatments, and responsive layouts while preserving the
+  browser and server source contracts.
+- Polish the documentation landing page, navigation, responsive design,
+  structured metadata, and accessible interaction treatments.
+- Replace the shared npm-package-json-lint preset with a project-owned ruleset
+  tailored to this private Python and Docusaurus application.
+
+### Fixed
+
+- Preserve newer time-lapse form edits when an earlier save completes by
+  clearing dirty state only when the submitted configuration still matches.
+- Replace dynamic icon markup writes with explicit DOM construction and harden
+  browser error, event, comparison, and state handling.
+
 ## [1.2.1] - 2026-08-17
 
 ### Added
@@ -183,4 +209,5 @@ All notable changes to GrowCam PC are documented here. The project follows
 [1.1.0]: https://github.com/Nick2bad4u/growcam-pc/compare/v1.0.0...v1.1.0
 [1.2.0]: https://github.com/Nick2bad4u/growcam-pc/compare/v1.1.0...v1.2.0
 [1.2.1]: https://github.com/Nick2bad4u/growcam-pc/compare/v1.2.0...v1.2.1
-[Unreleased]: https://github.com/Nick2bad4u/growcam-pc/compare/v1.2.1...HEAD
+[1.3.0]: https://github.com/Nick2bad4u/growcam-pc/compare/v1.2.1...v1.3.0
+[Unreleased]: https://github.com/Nick2bad4u/growcam-pc/compare/v1.3.0...HEAD

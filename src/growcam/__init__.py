@@ -2,6 +2,6 @@
 
 from .dvrip import DVRIPClient, DVRIPError, LoginInfo
 
-__version__ = "1.2.1"
+__version__ = "1.3.0"
 
 __all__ = ["DVRIPClient", "DVRIPError", "LoginInfo", "__version__"]
