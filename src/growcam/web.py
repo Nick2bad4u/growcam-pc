@@ -374,6 +374,7 @@ class GrowCamHTTPServer(ThreadingHTTPServer):
         self.camera_operation_lock = threading.Lock()
         self.recording_metadata_lock = threading.Lock()
         self.recording_metadata: OrderedDict[str, tuple[float, dict[str, object]]] = OrderedDict()
+        self._held_recordings: dict[str, dict[str, object]] = {}
         self.settings_store = SettingsStore(settings_file)
         app_settings = self.settings_store.snapshot()
         super().__init__(address, GrowCamHandler)
@@ -399,15 +400,46 @@ class GrowCamHTTPServer(ThreadingHTTPServer):
                 _ = self.recording_metadata.popitem(last=False)
 
     def cached_recording(self, filename: str) -> dict[str, object] | None:
-        """Return fresh recording metadata previously sent to this browser session."""
+        """Return recording metadata this browser session can resolve without the camera."""
         now = time_module.monotonic()
         with self.recording_metadata_lock:
+            held = self._held_recordings.get(filename)
+            if held is not None:
+                return dict(held)
             self._discard_expired_recordings(now)
             cached = self.recording_metadata.get(filename)
             if cached is None:
                 return None
             self.recording_metadata.move_to_end(filename)
             return dict(cached[1])
+
+    @contextmanager
+    def hold_recording_metadata(self, *filenames: str, record: dict[str, object]) -> Generator[None, None, None]:
+        """Keep one preview's metadata resolvable while its camera media operation runs.
+
+        A progressive preview holds the shared DVRIP session for as long as it
+        streams, which is far longer than the short recording index TTL. Browsers
+        keep probing that preview's cache entry while it plays, so the entry it
+        needs has to stay resolvable without asking the camera for it again.
+        """
+        with self.recording_metadata_lock:
+            shadowed = {filename: self._held_recordings.get(filename) for filename in filenames}
+            for filename in filenames:
+                self._held_recordings[filename] = record
+        try:
+            yield
+        finally:
+            with self.recording_metadata_lock:
+                for filename, previous in shadowed.items():
+                    if previous is None:
+                        _ = self._held_recordings.pop(filename, None)
+                    else:
+                        self._held_recordings[filename] = previous
+
+    def remember_held_recording(self, *filenames: str, record: dict[str, object]) -> None:
+        """Restart the short index TTL for a recording this browser is still working with."""
+        aliases = [{**record, "fileName": filename} for filename in dict.fromkeys(filenames)]
+        self.remember_recordings(aliases)
 
     def _discard_expired_recordings(self, now: float) -> None:
         expired = [
@@ -828,6 +860,9 @@ class GrowCamHandler(BaseHTTPRequestHandler):
         server = cast("GrowCamHTTPServer", self.server)
         record = server.cached_recording(camera_file)
         if record is None:
+            if cache_only:
+                self._preview_cache_probe_unresolved()
+                return
             record = _matching_recording(self._timelapse_state(), camera_file)
         resolved_file = cast("str", record["fileName"])
         key = f"timelapse:{_TIMELAPSE_PREVIEW_VERSION}:{_recording_identity(resolved_file)}:{record['sizeBytes']}"
@@ -860,12 +895,14 @@ class GrowCamHandler(BaseHTTPRequestHandler):
             )
 
         try:
-            preview, cache_hit = server.media_cache.get_or_build(key, ".mp4", build)
+            with server.hold_recording_metadata(camera_file, resolved_file, record=record):
+                preview, cache_hit = server.media_cache.get_or_build(key, ".mp4", build)
         except (OSError, RuntimeError, ValueError):
             if response_started:
                 self.close_connection = True
                 return
             raise
+        server.remember_held_recording(camera_file, resolved_file, record=record)
         if response_started:
             return
         self._send_file(
@@ -891,7 +928,12 @@ class GrowCamHandler(BaseHTTPRequestHandler):
         if day_end <= day_start:
             raise WebRequestError(HTTPStatus.NOT_FOUND, "No recording exists for that future date")
         server = cast("GrowCamHTTPServer", self.server)
-        record = self._history_recording(camera_file, selected_date, day_start, day_end)
+        record = server.cached_recording(camera_file)
+        if record is None:
+            if cache_only:
+                self._preview_cache_probe_unresolved()
+                return
+            record = self._history_recording(camera_file, selected_date, day_start, day_end)
         resolved_file = cast("str", record["fileName"])
         preview_range = _history_preview_range(record, at=at, duration=duration)
         range_key = (
@@ -921,12 +963,14 @@ class GrowCamHandler(BaseHTTPRequestHandler):
             )
 
         try:
-            preview, cache_hit = server.media_cache.get_or_build(key, ".mp4", build)
+            with server.hold_recording_metadata(camera_file, resolved_file, record=record):
+                preview, cache_hit = server.media_cache.get_or_build(key, ".mp4", build)
         except (OSError, RuntimeError, ValueError):
             if response_started:
                 self.close_connection = True
                 return
             raise
+        server.remember_held_recording(camera_file, resolved_file, record=record)
         if response_started:
             return
         self._send_file(
@@ -1040,6 +1084,16 @@ class GrowCamHandler(BaseHTTPRequestHandler):
             timestamp_scale=frames_per_second / cached_rate,
             align_video_to_audio=recover_audio,
         )
+
+    def _preview_cache_probe_unresolved(self) -> None:
+        """Report a cache-only probe as a miss without competing for the camera session.
+
+        The probe only asks whether a cached preview already exists. Its caller
+        is about to run the real preview request, which resolves the recording
+        index itself, so a cold probe must never raise the busy-camera conflict
+        that a long-running media operation causes.
+        """
+        self._json({"ready": False, "building": False})
 
     def _preview_cache_probe(self, key: str, *, disposition: str) -> None:
         server = cast("GrowCamHTTPServer", self.server)
