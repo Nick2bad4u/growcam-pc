@@ -285,12 +285,30 @@ async function previewCacheState(url, signal) {
     if (response.status === 404) {
         return "missing";
     }
-    if (!response.ok)
-        throw new Error(`Preview cache check failed (${response.status}).`);
+    if (!response.ok) {
+        const detail = await response.json().catch(() => undefined);
+        const reason =
+            typeof detail?.error === "string" && detail.error
+                ? `: ${detail.error}`
+                : ".";
+        const error = new Error(
+            `Preview cache check failed (${response.status})${reason}`
+        );
+        // A long media operation owns the one camera session, so 409 and server
+        // errors are wait-and-retry outcomes; 4xx responses are real faults.
+        error.isTransient = response.status === 409 || response.status >= 500;
+        throw error;
+    }
     const payload = await response.json();
     return payload.building ? "building" : "missing";
 }
 
+/**
+ * Upgrade a playing progressive preview to its cached copy once the camera
+ * operation that produced it finishes. A busy camera session briefly outranks a
+ * cache probe, so a few consecutive probe failures keep waiting instead of
+ * telling the operator the accelerated cache is unavailable.
+ */
 async function promoteCachedVideo(
     video,
     url,
@@ -299,8 +317,17 @@ async function promoteCachedVideo(
     timestampScale,
     onReady
 ) {
+    let transientFailures = 0;
     while (!request.signal.aborted && isCurrent()) {
-        const state = await previewCacheState(url, request.signal);
+        let state;
+        try {
+            state = await previewCacheState(url, request.signal);
+            transientFailures = 0;
+        } catch (error) {
+            if (!error?.isTransient || transientFailures >= 8) throw error;
+            transientFailures += 1;
+            state = "building";
+        }
         if (state === "ready") {
             await resumeCachedVideo(
                 video,
