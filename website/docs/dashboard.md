@@ -39,6 +39,8 @@ The Files view combines ordinary recordings and native time-lapses that overlap 
 
 Files still being written are labeled **Recording** and do not offer a final download until the camera closes them.
 
+The listing does not depend on the camera's time-lapse schedule being readable. If `Storage.EpitomeRecord` reports a schedule this build cannot parse, Files still lists the selected day's recording and time-lapse indexes; only the schedule-derived **Recording** marker and any earlier multi-day time-lapse row are omitted, and the Time-lapse view reports the configuration problem itself.
+
 ## Settings
 
 The Settings view stores application preferences in a revisioned local JSON file. It controls:

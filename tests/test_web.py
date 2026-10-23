@@ -20,6 +20,7 @@ from typing_extensions import override
 from growcam import web
 from growcam.dvrip import DVRIPError, LoginInfo
 from growcam.settings import settings_path
+from growcam.timelapse import TimelapseValidationError
 from growcam.web import (
     GrowCamHTTPServer,
     LiveQuality,
@@ -1406,6 +1407,243 @@ def test_files_route_queries_both_camera_partitions(  # noqa: C901 - integration
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+@pytest.mark.parametrize(
+    ("time_sections", "expected_timelapses"),
+    [
+        (["1 08:00:00-18:00:00"] + ["0 00:00:00-00:00:00"] * 5, 2),
+        (["all day"], 1),
+    ],
+    ids=["parked-unused-windows", "unreadable-window"],
+)
+def test_files_route_does_not_depend_on_a_readable_time_lapse_schedule(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    time_sections: list[str],
+    expected_timelapses: int,
+) -> None:
+    class FixedDateTime(datetime):
+        @classmethod
+        @override
+        def now(cls, tz: tzinfo | None = None) -> FixedDateTime:
+            assert tz is None
+            return cls(2026, 8, 2, 15, 0)
+
+    class FileIndexCamera:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(
+            self,
+            _exc_type: type[BaseException] | None,
+            _exc: BaseException | None,
+            _traceback: TracebackType | None,
+        ) -> None:
+            return None
+
+        def recordings(
+            self,
+            *,
+            start: datetime,
+            end: datetime,
+            channel: int,
+            event: str,
+        ) -> list[dict[str, object]]:
+            assert channel == 0
+            assert start < end
+            if event == "R":
+                return [
+                    {
+                        "BeginTime": "2026-08-02 12:00:00",
+                        "EndTime": "2026-08-02 12:10:00",
+                        "FileName": "/idea0/2026-08-02/001/12.00.00-12.10.00[R][0].h264",
+                        "FileLength": "0x400",
+                    }
+                ]
+            assert event == "E"
+            if start == datetime(2026, 8, 2):
+                return [
+                    {
+                        "BeginTime": "2026-08-02 13:00:00",
+                        "EndTime": "2026-08-02 14:00:00",
+                        "FileName": "/idea0/2026-08-02/001/13.00.00-14.00.00[E][0]._h264",
+                        "FileLength": "0x200",
+                    }
+                ]
+            return [
+                {
+                    "BeginTime": "2026-08-01 08:00:00",
+                    "EndTime": "2026-08-02 15:00:00",
+                    "FileName": "/idea0/2026-08-01/001/08.00.00-15.00.00[E][0]._h264",
+                    "FileLength": "0x300",
+                }
+            ]
+
+        def config_get(self, name: str) -> object:
+            assert name == "Storage.EpitomeRecord"
+            return [
+                {
+                    "Enable": True,
+                    "EndTime": "2026-08-03 18:00:00",
+                    "Interval": 300,
+                    "StartTime": "2026-08-01 08:00:00",
+                    "TimeSection": time_sections,
+                }
+            ]
+
+    camera = FileIndexCamera()
+
+    def open_camera(_handler: web.GrowCamHandler) -> FileIndexCamera:
+        return camera
+
+    monkeypatch.setattr(web, "datetime", FixedDateTime)
+    monkeypatch.setattr(web, "_preview_cache_directory", lambda: tmp_path)
+    monkeypatch.setattr(web.GrowCamHandler, "_camera", open_camera)
+    server = GrowCamHTTPServer(("127.0.0.1", 0), WebConfig("192.0.2.1"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+    try:
+        connection.request("GET", "/api/files?date=2026-08-02")
+        response = connection.getresponse()
+        payload = cast("dict[str, object]", json.loads(response.read()))
+
+        assert response.status == HTTPStatus.OK
+        summary = cast("dict[str, int]", payload["summary"])
+        assert summary["recordings"] == 1
+        assert summary["timelapses"] == expected_timelapses
+        assert summary["count"] == 1 + expected_timelapses
+    finally:
+        connection.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_unreadable_time_lapse_schedule_does_not_pause_the_other_camera_tabs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    connect_count = 0
+    selected_date = datetime.now(tz=UTC).astimezone().date().isoformat()
+
+    class UnreadableScheduleCamera:
+        def __init__(self, _host: str, _port: int, _username: str, _password: str) -> None:
+            self.login_info: LoginInfo | None = None
+
+        def connect(self) -> LoginInfo:
+            nonlocal connect_count
+            connect_count += 1
+            self.login_info = LoginInfo(1, 1, "GrowCam", 20)
+            return self.login_info
+
+        def close(self) -> None:
+            self.login_info = None
+
+        def keepalive(self) -> None:
+            return
+
+        def recordings(
+            self,
+            *,
+            start: datetime,
+            end: datetime,
+            channel: int,
+            event: str,
+        ) -> list[dict[str, object]]:
+            assert channel == 0
+            assert start < end
+            marker = "[R][0].h264" if event == "R" else "[E][0]._h264"
+            return [
+                {
+                    "BeginTime": f"{selected_date} 12:00:00",
+                    "EndTime": f"{selected_date} 12:10:00",
+                    "FileName": f"/idea0/{selected_date}/001/12.00.00-12.10.00{marker}",
+                    "FileLength": "0x400",
+                }
+            ]
+
+        def config_get(self, name: str) -> object:
+            assert name == "Storage.EpitomeRecord"
+            return [
+                {
+                    "Enable": True,
+                    "EndTime": "2026-08-31 18:00:00",
+                    "Interval": 300,
+                    "StartTime": "2026-08-01 08:00:00",
+                    "TimeSection": ["1 22:00:00-02:00:00"],
+                }
+            ]
+
+    monkeypatch.setattr(web, "_preview_cache_directory", lambda: tmp_path)
+    monkeypatch.setattr(web, "DVRIPClient", UnreadableScheduleCamera)
+    server = GrowCamHTTPServer(("127.0.0.1", 0), WebConfig("192.0.2.1"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        timelapse_status, timelapse_payload = _json_request(server, "/api/timelapse")
+        assert timelapse_status == HTTPStatus.BAD_GATEWAY
+        assert "must end after it starts" in cast("str", timelapse_payload["error"])
+
+        files_status, files_payload = _json_request(server, f"/api/files?date={selected_date}")
+        history_status, history_payload = _json_request(server, f"/api/history?date={selected_date}")
+
+        assert files_status == HTTPStatus.OK
+        assert cast("dict[str, int]", files_payload["summary"])["count"] == 2
+        assert history_status == HTTPStatus.OK
+        assert len(cast("list[object]", history_payload["recordings"])) == 1
+        assert connect_count == 1
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_unparsable_camera_payload_keeps_the_shared_dvrip_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connect_count = 0
+    close_count = 0
+
+    class PayloadFaultCamera:
+        def __init__(self, _host: str, _port: int, _username: str, _password: str) -> None:
+            self.login_info: LoginInfo | None = None
+
+        def connect(self) -> LoginInfo:
+            nonlocal connect_count
+            connect_count += 1
+            self.login_info = LoginInfo(1, 1, "GrowCam", 20)
+            return self.login_info
+
+        def close(self) -> None:
+            nonlocal close_count
+            if self.login_info is None:
+                return
+            close_count += 1
+            self.login_info = None
+
+        def keepalive(self) -> None:
+            return
+
+        def config_get(self, _name: str) -> object:
+            raise TimelapseValidationError("Enabled TimeSection '1 22:00:00-02:00:00' must end after it starts")
+
+    monkeypatch.setattr(web, "DVRIPClient", PayloadFaultCamera)
+    coordinator = web.CameraControlCoordinator(WebConfig("192.0.2.1"))
+    try:
+        with pytest.raises(TimelapseValidationError, match="must end after it starts"), coordinator.camera() as camera:
+            _ = camera.config_get("Storage.EpitomeRecord")
+        first_identity = id(camera)
+
+        assert coordinator.snapshot().status is web.CameraControlStatus.AVAILABLE
+        with coordinator.camera() as reused_camera:
+            assert id(reused_camera) == first_identity
+        assert connect_count == 1
+        assert close_count == 0
+    finally:
+        coordinator.close()
+    assert close_count == 1
 
 
 def test_cached_media_supports_http_range_requests(

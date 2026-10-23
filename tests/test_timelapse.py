@@ -18,21 +18,21 @@ from growcam.timelapse import (
 )
 
 
-def _camera_value(*, enabled: bool = True, interval: int = 900) -> list[dict[str, object]]:
+def _camera_value(
+    *,
+    enabled: bool = True,
+    interval: int = 900,
+    time_sections: list[str] | None = None,
+) -> list[dict[str, object]]:
     return [
         {
             "Enable": enabled,
             "EndTime": "2026-09-11 01:44:02",
             "Interval": interval,
             "StartTime": "2026-07-31 01:45:28",
-            "TimeSection": [
-                "1 00:00:00-23:59:59",
-                "0 00:00:00-23:59:59",
-                "0 00:00:00-23:59:59",
-                "0 00:00:00-23:59:59",
-                "0 00:00:00-23:59:59",
-                "0 00:00:00-23:59:59",
-            ],
+            "TimeSection": (
+                ["1 00:00:00-23:59:59"] + ["0 00:00:00-23:59:59"] * 5 if time_sections is None else time_sections
+            ),
         }
     ]
 
@@ -73,6 +73,36 @@ def test_camera_config_parses_progress_and_daily_window() -> None:
     assert payload["active"] is True
     assert cast("float", payload["progressPercent"]) > 0
     assert payload["revision"] == config.revision
+
+
+def test_camera_config_accepts_parked_unused_windows() -> None:
+    """The tested firmware parks unused windows as an inert zero-length range."""
+    parked = ["1 08:00:00-18:00:00"] + ["0 00:00:00-00:00:00"] * 5
+
+    config = TimelapseConfig.from_camera(_camera_value(time_sections=parked))
+
+    assert config.daily_window.start == "08:00:00"
+    assert config.daily_window.end == "18:00:00"
+
+
+def test_parked_windows_survive_a_config_round_trip() -> None:
+    """Raw windows must be preserved so a rollback cannot rewrite the schedule."""
+    parked = ["0 00:00:00-00:00:00"] * 6
+
+    config = TimelapseConfig.from_camera(_camera_value(enabled=False, time_sections=parked))
+
+    assert config.to_camera_value()[0]["TimeSection"] == parked
+    assert (config.daily_window.start, config.daily_window.end) == ("00:00:00", "23:59:59")
+
+
+def test_enabled_unordered_time_section_is_rejected() -> None:
+    with pytest.raises(TimelapseValidationError, match="must end after it starts"):
+        _ = TimelapseConfig.from_camera(_camera_value(time_sections=["1 22:00:00-02:00:00"]))
+
+
+def test_malformed_time_section_is_rejected_even_when_disabled() -> None:
+    with pytest.raises(TimelapseValidationError, match="must use '1 HH:MM:SS-HH:MM:SS'"):
+        _ = TimelapseConfig.from_camera(_camera_value(time_sections=["1 08:00:00-18:00:00", "0 all-day"]))
 
 
 def test_browser_config_builds_one_guarded_daily_window() -> None:

@@ -282,11 +282,20 @@ def _clock_seconds(value: str, label: str, *, allow_end_of_day: bool = False) ->
 
 
 def _parse_section(value: str) -> tuple[bool, str, str]:
+    """Return one ``TimeSection`` window's enabled flag and clock bounds.
+
+    Only enabled windows must be ordered. The tested firmware parks unused
+    slots as ``0 00:00:00-00:00:00``, and rejecting that inert shape hides the
+    unrelated file listing behind a schedule the camera never applies.
+    """
     match = _SECTION_PATTERN.fullmatch(value)
     if match is None:
         raise TimelapseValidationError("TimeSection entries must use '1 HH:MM:SS-HH:MM:SS'")
     start = match.group("start")
     end = match.group("end")
-    if _clock_seconds(end, "TimeSection end", allow_end_of_day=True) <= _clock_seconds(start, "TimeSection start"):
-        raise TimelapseValidationError("TimeSection end must be after its start")
-    return match.group("enabled") == "1", start, end
+    enabled = match.group("enabled") == "1"
+    if enabled and _clock_seconds(end, "TimeSection end", allow_end_of_day=True) <= _clock_seconds(
+        start, "TimeSection start"
+    ):
+        raise TimelapseValidationError(f"Enabled TimeSection {value!r} must end after it starts")
+    return enabled, start, end

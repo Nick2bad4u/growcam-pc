@@ -8,6 +8,8 @@ import webbrowser
 from typing import TYPE_CHECKING
 from unittest.mock import Mock
 
+import pytest
+
 from growcam import cli
 from growcam.cli import _browser_url, _parser
 from growcam.dvrip import LoginInfo
@@ -19,7 +21,12 @@ if TYPE_CHECKING:
     from pathlib import Path
     from typing import Self
 
-    import pytest
+
+@pytest.fixture(autouse=True)
+def _isolated_camera_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Clear operator camera settings so CLI default assertions stay reproducible."""
+    for name in ("GROWCAM_HOST", "GROWCAM_PORT", "GROWCAM_USERNAME", "GROWCAM_PASSWORD"):
+        monkeypatch.delenv(name, raising=False)
 
 
 def test_camera_address_has_no_machine_specific_default(monkeypatch: pytest.MonkeyPatch) -> None:

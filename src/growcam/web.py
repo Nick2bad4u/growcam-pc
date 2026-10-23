@@ -78,6 +78,9 @@ _TIMELAPSE_API = "/api/timelapse"
 _MP4_CONTENT_TYPE = "video/mp4"
 _INVALID_BYTE_RANGE = "Media byte range is invalid"
 _ACCOUNT_REJECTION_RETURN_CODES = frozenset({106, 203, 204, 205, 206, 207, 430})
+# Local parsers reject what the camera sent; they never mean the DVRIP session
+# itself failed, so they must not open the camera-control circuit.
+_PAYLOAD_VALIDATION_ERRORS: tuple[type[Exception], ...] = (SettingsValidationError, TimelapseValidationError)
 _CONTENT_SECURITY_POLICY = (
     "default-src 'self'; base-uri 'none'; connect-src 'self'; form-action 'self'; "
     "frame-ancestors 'none'; img-src 'self' blob:; media-src 'self' blob:; object-src 'none'; "
@@ -253,6 +256,11 @@ class CameraControlCoordinator:
                 self._ensure_keepalive_thread()
             try:
                 yield camera
+            except _PAYLOAD_VALIDATION_ERRORS:
+                # The camera answered this request normally; only our own parser
+                # rejected the payload. Tearing the session down here pauses every
+                # DVRIP-backed tab and costs another login on the next request.
+                raise
             except (DVRIPError, OSError, TypeError, ValueError) as error:
                 self._block_client(
                     error,
@@ -709,12 +717,11 @@ class GrowCamHandler(BaseHTTPRequestHandler):
                     channel=0,
                     event="E",
                 )
-                config = TimelapseConfig.from_camera(camera.config_get(TIMELAPSE_CONFIG_NAME))
-                current_timelapses, active_timelapse_filename = _timelapse_index(camera, config, now)
+                scheduled_timelapses, active_timelapse_filename = _scheduled_timelapses(camera, now)
                 indexed_by_name = {
                     str(record.get("FileName", "")): record for record in timelapses if record.get("FileName")
                 }
-                for record in current_timelapses:
+                for record in scheduled_timelapses:
                     filename = str(record.get("FileName", ""))
                     if filename and _recording_overlaps(record, day_start, day_end):
                         indexed_by_name[filename] = record
@@ -1254,6 +1261,21 @@ def _active_timelapse_filename(
     if config.enabled and config.start_time <= now < config.end_time and recordings:
         return str(recordings[-1].get("FileName", ""))
     return ""
+
+
+def _scheduled_timelapses(camera: DVRIPClient, now: datetime) -> tuple[list[dict[str, Any]], str]:
+    """Return the current schedule's index rows and its active filename.
+
+    An unparsable ``Storage.EpitomeRecord`` must not hide the Files listing: the
+    day's ``E`` partition index is already known, so degrade to no schedule rows
+    and no active marker. The Time-lapse view still reports the configuration
+    error itself.
+    """
+    try:
+        config = TimelapseConfig.from_camera(camera.config_get(TIMELAPSE_CONFIG_NAME))
+    except TimelapseValidationError:
+        return [], ""
+    return _timelapse_index(camera, config, now)
 
 
 def _timelapse_update_request(payload: dict[str, object]) -> tuple[str, TimelapseConfig]:
