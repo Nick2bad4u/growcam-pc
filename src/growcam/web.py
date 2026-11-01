@@ -396,7 +396,8 @@ class GrowCamHTTPServer(ThreadingHTTPServer):
         self.camera_operation_lock = threading.Lock()
         self.recording_metadata_lock = threading.Lock()
         self.recording_metadata: OrderedDict[str, tuple[float, dict[str, object]]] = OrderedDict()
-        self._held_recordings: dict[str, dict[str, object]] = {}
+        self._held_recordings: dict[str, dict[int, dict[str, object]]] = {}
+        self._recording_hold_token = 0
         self.settings_store = SettingsStore(settings_file)
         app_settings = self.settings_store.snapshot()
         super().__init__(address, GrowCamHandler)
@@ -426,8 +427,10 @@ class GrowCamHTTPServer(ThreadingHTTPServer):
         now = time_module.monotonic()
         with self.recording_metadata_lock:
             held = self._held_recordings.get(filename)
-            if held is not None:
-                return dict(held)
+            if held:
+                # The newest active hold answers first, exactly as a nested
+                # shadow would; older holds stay queued behind it.
+                return dict(held[max(held)])
             self._discard_expired_recordings(now)
             cached = self.recording_metadata.get(filename)
             if cached is None:
@@ -443,20 +446,28 @@ class GrowCamHTTPServer(ThreadingHTTPServer):
         streams, which is far longer than the short recording index TTL. Browsers
         keep probing that preview's cache entry while it plays, so the entry it
         needs has to stay resolvable without asking the camera for it again.
+        Each hold owns a token, so overlapping previews exit in any order: a
+        finishing request releases only its own token, the newest remaining
+        hold keeps the entry resolvable, and the last release clears it.
         """
         with self.recording_metadata_lock:
-            shadowed = {filename: self._held_recordings.get(filename) for filename in filenames}
+            claimed: list[tuple[str, int]] = []
             for filename in filenames:
-                self._held_recordings[filename] = record
+                self._recording_hold_token += 1
+                token = self._recording_hold_token
+                self._held_recordings.setdefault(filename, {})[token] = record
+                claimed.append((filename, token))
         try:
             yield
         finally:
             with self.recording_metadata_lock:
-                for filename, previous in shadowed.items():
-                    if previous is None:
-                        _ = self._held_recordings.pop(filename, None)
-                    else:
-                        self._held_recordings[filename] = previous
+                for filename, token in claimed:
+                    holders = self._held_recordings.get(filename)
+                    if holders is None:
+                        continue
+                    _ = holders.pop(token, None)
+                    if not holders:
+                        del self._held_recordings[filename]
 
     def remember_held_recording(self, *filenames: str, record: dict[str, object]) -> None:
         """Restart the short index TTL for a recording this browser is still working with."""
@@ -959,7 +970,10 @@ class GrowCamHandler(BaseHTTPRequestHandler):
         resolved_file = cast("str", record["fileName"])
         preview_range = _history_preview_range(record, at=at, duration=duration)
         range_key = (
-            "full" if preview_range is None else f"{preview_range[0].isoformat()}:{preview_range[1].isoformat()}"
+            "full"
+            if preview_range is None
+            else f"{preview_range.start.isoformat()}:"
+            f"{'live' if preview_range.open_ended else preview_range.end.isoformat()}"
         )
         key = (
             f"history:{_HISTORY_PREVIEW_VERSION}:{video_codec}:{_recording_identity(resolved_file)}:"
@@ -1006,7 +1020,7 @@ class GrowCamHandler(BaseHTTPRequestHandler):
         self,
         record: dict[str, object],
         resolved_file: str,
-        preview_range: tuple[datetime, datetime] | None,
+        preview_range: _PreviewWindow | None,
     ) -> Callable[[BinaryIO], int]:
         """Build a lazy camera source for one full or time-bounded rewind preview."""
         if preview_range is not None:
@@ -1014,8 +1028,8 @@ class GrowCamHandler(BaseHTTPRequestHandler):
             def ranged_source(output: BinaryIO) -> int:
                 with self._camera() as camera:
                     return camera.stream_download_by_time(
-                        start=preview_range[0],
-                        end=preview_range[1],
+                        start=preview_range.start,
+                        end=preview_range.end,
                         output=output,
                         file_type=0,
                     )
@@ -1497,12 +1511,28 @@ def _history_date(value: str) -> date:
         raise WebRequestError(HTTPStatus.BAD_REQUEST, "History date must use YYYY-MM-DD") from error
 
 
+@dataclass(frozen=True, slots=True)
+class _PreviewWindow:
+    """One resolved quick-rewind range plus whether its end is still moving.
+
+    ``open_ended`` marks a window cut short by the live edge of a segment
+    still being written. That end is a moving clock reading, so it must not
+    become part of the cache identity; requests for the same window share one
+    identity whenever it is open-ended and find the preview already built
+    instead of rebuilding at every new reading of the clock.
+    """
+
+    start: datetime
+    end: datetime
+    open_ended: bool
+
+
 def _history_preview_range(
     record: dict[str, object],
     *,
     at: str,
     duration: str,
-) -> tuple[datetime, datetime] | None:
+) -> _PreviewWindow | None:
     if not at and not duration:
         return None
     if not at or not duration:
@@ -1525,10 +1555,15 @@ def _history_preview_range(
             HTTPStatus.BAD_REQUEST,
             "Quick rewind time is outside the recorded part of the selected recording",
         )
-    requested_end = min(requested_start + timedelta(seconds=duration_seconds), recording_end)
+    window_end = requested_start + timedelta(seconds=duration_seconds)
+    requested_end = min(window_end, recording_end)
     if requested_end <= requested_start:
         raise WebRequestError(HTTPStatus.BAD_REQUEST, "Quick rewind window is empty")
-    return requested_start, requested_end
+    return _PreviewWindow(
+        start=requested_start,
+        end=requested_end,
+        open_ended=bool(record.get("active")) and requested_end < window_end,
+    )
 
 
 def _preview_video_codec(value: str) -> str:
