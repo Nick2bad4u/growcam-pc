@@ -325,6 +325,12 @@ a {
     gap: 13px;
     align-items: center;
 }
+/* Keep Download MKV and Snapshot grouped at the right end of the footer. */
+.player-actions {
+    display: inline-flex;
+    gap: 13px;
+    align-items: center;
+}
 .quality-selector {
     display: inline-flex;
     padding: 0;

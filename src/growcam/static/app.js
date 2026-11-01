@@ -1101,6 +1101,7 @@ function renderHistory(payload) {
     document.querySelector("#history-title").textContent =
         "Choose a segment below";
     document.querySelector("#history-download").hidden = true;
+    document.querySelector("#history-snapshot").hidden = true;
     historyData = payload;
     selectedHistoryIndex = -1;
     selectedHistorySeconds = null;
@@ -1285,7 +1286,7 @@ function selectHistorySegment(index, atSeconds = null) {
     document.querySelector("#history-next").disabled =
         index >= recordings.length - 1;
     const download = document.querySelector("#history-download");
-    download.href = `/api/download?file=${encodeURIComponent(recording.fileName)}`;
+    download.dataset.file = recording.fileName;
     download.hidden = recording.active;
     buildHistoryPreview(recording, requestedSeconds);
 }
@@ -1316,6 +1317,7 @@ async function buildHistoryPreview(recording, atSeconds) {
     }
     historyPlaybackStartSeconds = atSeconds;
     card.setAttribute("aria-busy", "true");
+    document.querySelector("#history-snapshot").hidden = true;
     const startedAt = performance.now();
     let isPlaybackStarted = false;
     let isUsedCompatibleFallback = false;
@@ -1365,6 +1367,7 @@ async function buildHistoryPreview(recording, atSeconds) {
         if (historyRequest !== request) return;
         isPlaybackStarted = true;
         document.querySelector("#history-placeholder").hidden = true;
+        document.querySelector("#history-snapshot").hidden = false;
         await historyVideo.play().catch(() => undefined);
         status.textContent = `${isUsedCompatibleFallback ? "Compatible H.264 fallback · " : ""}Ready in ${loadTimeLabel(startedAt)} · cached when complete.`;
         if (cacheState === "missing") {
@@ -1400,6 +1403,56 @@ async function buildHistoryPreview(recording, atSeconds) {
             card.setAttribute("aria-busy", "false");
         }
     }
+}
+
+/**
+ * Hand the selected recording to the browser as a file. The endpoint answers
+ * with an attachment header, so navigation starts the save and keeps the page.
+ */
+function downloadHistoryMkv() {
+    const file = document.querySelector("#history-download").dataset.file;
+    if (file) location.assign(`/api/download?file=${encodeURIComponent(file)}`);
+}
+
+/**
+ * Save the frame currently on the rewind screen. The canvas and the media
+ * both come from this loopback server, so the canvas is never tainted and
+ * the capture never contacts the camera.
+ */
+function saveHistorySnapshot() {
+    const status = document.querySelector("#history-status");
+    if (historyVideo.readyState < 2 || !historyVideo.videoWidth) {
+        status.textContent = "Wait for the preview to start before saving.";
+        return;
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = historyVideo.videoWidth;
+    canvas.height = historyVideo.videoHeight;
+    canvas.getContext("2d").drawImage(historyVideo, 0, 0);
+    const seconds = Math.round(
+        (historyPlaybackStartSeconds ?? 0) + historyVideo.currentTime
+    );
+    const stamp = isoForDaySeconds(historyData?.date || "", seconds);
+    const fileName = `growcam-rewind-${stamp.slice(0, 10)}-${stamp
+        .slice(11)
+        .replaceAll(":", ".")}.jpg`;
+    canvas.toBlob(
+        (blob) => {
+            if (!blob) {
+                status.textContent = "The browser could not encode this frame.";
+                return;
+            }
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = fileName;
+            link.click();
+            setTimeout(() => URL.revokeObjectURL(url), 30_000);
+            status.textContent = `Snapshot saved as ${fileName}.`;
+        },
+        "image/jpeg",
+        0.92
+    );
 }
 
 /**
@@ -2023,6 +2076,13 @@ historyWindow.addEventListener("change", () => {
     if (selectedHistoryIndex >= 0 && selectedHistorySeconds !== null)
         selectHistorySegment(selectedHistoryIndex, selectedHistorySeconds);
 });
+document
+    .querySelector("#history-download")
+    .addEventListener("click", downloadHistoryMkv);
+document.querySelector("#history-snapshot").addEventListener(
+    "click",
+    saveHistorySnapshot
+);
 historyVideo.addEventListener("timeupdate", () => {
     if (historyPlaybackStartSeconds === null) return;
     setScrubberPosition(historyPlaybackStartSeconds + historyVideo.currentTime);
