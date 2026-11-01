@@ -189,6 +189,56 @@ def test_quick_history_range_rejects_time_outside_recording() -> None:
         _ = _history_preview_range(record, at="2026-08-01T12:11:00", duration="120")
 
 
+def test_quick_history_range_clamps_active_recording_to_now(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stop the quick-rewind window at the live edge of an active segment.
+
+    The index reports an active segment's scheduled end, but only recorded
+    seconds can stream back.
+    """
+
+    class FixedDateTime(datetime):
+        @classmethod
+        @override
+        def now(cls, tz: tzinfo | None = None) -> FixedDateTime:
+            assert tz is None
+            return cls(2026, 8, 1, 12, 0, 8)
+
+    monkeypatch.setattr(web, "datetime", FixedDateTime)
+    record: dict[str, object] = {
+        "beginTime": "2026-08-01 12:00:00",
+        "endTime": "2026-08-01 12:10:00",
+        "active": True,
+    }
+
+    assert _history_preview_range(record, at="2026-08-01T12:00:00", duration="120") == (
+        datetime(2026, 8, 1, 12, 0),
+        datetime(2026, 8, 1, 12, 0, 8),
+    )
+
+
+def test_quick_history_range_rejects_future_moment_of_active_recording(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FixedDateTime(datetime):
+        @classmethod
+        @override
+        def now(cls, tz: tzinfo | None = None) -> FixedDateTime:
+            assert tz is None
+            return cls(2026, 8, 1, 12, 0, 8)
+
+    monkeypatch.setattr(web, "datetime", FixedDateTime)
+    record: dict[str, object] = {
+        "beginTime": "2026-08-01 12:00:00",
+        "endTime": "2026-08-01 12:10:00",
+        "active": True,
+    }
+
+    with pytest.raises(WebRequestError, match="outside"):
+        _ = _history_preview_range(record, at="2026-08-01T12:05:00", duration="120")
+
+
 @pytest.mark.parametrize(
     ("header", "expected"),
     [
@@ -536,6 +586,77 @@ def test_camera_control_coordinator_keeps_the_single_session_authenticated(
         coordinator.close()
 
     assert close_count == 1
+
+
+def test_abandoned_preview_teardown_keeps_camera_controls_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Treat a browser-initiated teardown as self-inflicted.
+
+    A walkout tears the transfer down itself, so it must not pause every
+    camera-backed tab until a manual retry.
+    """
+    close_count = 0
+
+    class AbandoningCamera:
+        def __init__(self, _host: str, _port: int, _username: str, _password: str) -> None:
+            self.login_info: LoginInfo | None = None
+
+        def connect(self) -> LoginInfo:
+            self.login_info = LoginInfo(1, 1, "GrowCam", 20)
+            return self.login_info
+
+        def close(self) -> None:
+            nonlocal close_count
+            if self.login_info is None:
+                return
+            close_count += 1
+            self.login_info = None
+
+        def keepalive(self) -> None:
+            return None
+
+    monkeypatch.setattr(web, "DVRIPClient", AbandoningCamera)
+    coordinator = web.CameraControlCoordinator(WebConfig("192.0.2.1"))
+    try:
+        coordinator.cancel_active_operation()
+        with pytest.raises(BrokenPipeError), coordinator.camera():
+            raise BrokenPipeError("FFmpeg stopped reading the preview media stream")
+        assert coordinator.snapshot().status is web.CameraControlStatus.AVAILABLE
+        assert close_count == 1
+        with coordinator.camera() as replacement:
+            assert replacement.login_info is not None
+    finally:
+        coordinator.close()
+
+
+def test_camera_fault_still_opens_the_dvrip_circuit_without_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FaultyCamera:
+        def __init__(self, _host: str, _port: int, _username: str, _password: str) -> None:
+            self.login_info: LoginInfo | None = None
+
+        def connect(self) -> LoginInfo:
+            self.login_info = LoginInfo(1, 1, "GrowCam", 20)
+            return self.login_info
+
+        def close(self) -> None:
+            self.login_info = None
+
+        def keepalive(self) -> None:
+            return None
+
+    monkeypatch.setattr(web, "DVRIPClient", FaultyCamera)
+    coordinator = web.CameraControlCoordinator(WebConfig("192.0.2.1"))
+    try:
+        with pytest.raises(DVRIPError), coordinator.camera():
+            raise DVRIPError("Camera closed the DVRIP connection")
+        state = coordinator.snapshot()
+        assert state.status is web.CameraControlStatus.BLOCKED
+        assert state.retry_allowed is True
+    finally:
+        coordinator.close()
 
 
 def test_keepalive_failure_blocks_without_automatically_reconnecting(
@@ -1255,6 +1376,62 @@ def test_cold_cache_probe_reports_a_miss_without_opening_the_camera(
             assert status == HTTPStatus.OK
             assert payload == {"ready": False, "building": False}
     finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_busy_media_slot_reports_probe_as_building(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Read a busy single media slot as building so browsers wait.
+
+    A different preview holding the only media slot must not arrive mid media
+    load as a conflict the video element cannot explain.
+    """
+
+    def fail_camera(_handler: web.GrowCamHandler) -> None:
+        pytest.fail("a cache probe must not open a camera session")
+
+    monkeypatch.setattr(web, "_preview_cache_directory", lambda: tmp_path / "cache")
+    monkeypatch.setattr(web.GrowCamHandler, "_camera", fail_camera)
+    history_file = "/idea0/2026-08-02/001/03.00.00-03.10.00[R][@2fc5][0].h264"
+    record: dict[str, object] = {
+        "beginTime": "2026-08-02 03:00:00",
+        "endTime": "2026-08-02 03:10:00",
+        "fileName": history_file,
+        "sizeBytes": 69_000_512,
+        "active": False,
+    }
+    server = GrowCamHTTPServer(("127.0.0.1", 0), WebConfig("192.0.2.1"), settings_file=None)
+    server.remember_recordings([record])
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    build_started = threading.Event()
+    release_build = threading.Event()
+
+    def slow_build(destination: Path) -> None:
+        build_started.set()
+        assert release_build.wait(timeout=5)
+        _ = destination.write_bytes(b"other preview")
+
+    builder = threading.Thread(
+        target=lambda: server.media_cache.get_or_build("other-key", ".mp4", slow_build),
+        daemon=True,
+    )
+    builder.start()
+    try:
+        assert build_started.wait(timeout=5)
+        path = f"/api/history/preview?{urlencode({'file': history_file, 'videoCodec': 'h264', 'cacheOnly': '1'})}"
+
+        status, payload = _json_request(server, path)
+
+        assert status == HTTPStatus.ACCEPTED
+        assert payload == {"ready": False, "building": True}
+    finally:
+        release_build.set()
+        builder.join(timeout=5)
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
