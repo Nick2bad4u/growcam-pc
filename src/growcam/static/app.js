@@ -304,6 +304,47 @@ async function previewCacheState(url, signal) {
 }
 
 /**
+ * Only one camera media operation streams at a time, and a browser cannot read
+ * the server's conflict response out of a failed video element. Keep probing
+ * while the media queue is busy so the player never starts a load the camera
+ * session is guaranteed to reject.
+ */
+async function waitForPreviewMediaSlot(url, state, signal, onWaiting) {
+    let currentState = state;
+    let transientFailures = 0;
+    while (currentState === "building" && !signal.aborted) {
+        onWaiting();
+        await delayWithSignal(750, signal);
+        try {
+            currentState = await previewCacheState(url, signal);
+            transientFailures = 0;
+        } catch (error) {
+            if (!error?.isTransient || transientFailures >= 8) throw error;
+            transientFailures += 1;
+        }
+    }
+    return currentState;
+}
+
+/**
+ * A failed media load cannot say why it failed, and one common reason is a
+ * paused camera session. Ask the control endpoint so the operator sees the
+ * actual cause and the Retry action instead of a bare media error.
+ */
+async function historyLoadErrorText(error) {
+    const base = errorMessage(error);
+    try {
+        const control = await getJson("/api/camera-control");
+        if (control?.circuitOpen === true) {
+            return `${control.message || base} · camera controls paused — use "Retry camera controls" in the banner above`;
+        }
+    } catch {
+        // A control probe never outranks the media failure just reported.
+    }
+    return base;
+}
+
+/**
  * Upgrade a playing progressive preview to its cached copy once the camera
  * operation that produced it finishes. A busy camera session briefly outranks a
  * cache probe, so a few consecutive probe failures keep waiting instead of
@@ -1284,6 +1325,15 @@ async function buildHistoryPreview(recording, atSeconds) {
     try {
         try {
             cacheState = await previewCacheState(previewUrl, request.signal);
+            cacheState = await waitForPreviewMediaSlot(
+                previewUrl,
+                cacheState,
+                request.signal,
+                () => {
+                    status.textContent =
+                        "Waiting for the camera media queue…";
+                }
+            );
             await loadVideoStream(historyVideo, previewUrl, request.signal);
         } catch (error) {
             const preference =
@@ -1301,6 +1351,15 @@ async function buildHistoryPreview(recording, atSeconds) {
             status.textContent =
                 "Native HEVC did not play; retrying compatible H.264…";
             cacheState = await previewCacheState(previewUrl, request.signal);
+            cacheState = await waitForPreviewMediaSlot(
+                previewUrl,
+                cacheState,
+                request.signal,
+                () => {
+                    status.textContent =
+                        "Waiting for the camera media queue…";
+                }
+            );
             await loadVideoStream(historyVideo, previewUrl, request.signal);
         }
         if (historyRequest !== request) return;
@@ -1330,8 +1389,10 @@ async function buildHistoryPreview(recording, atSeconds) {
             });
         }
     } catch (error) {
-        if (!(error instanceof DOMException) || error.name !== "AbortError")
-            status.textContent = errorMessage(error);
+        if (!(error instanceof DOMException) || error.name !== "AbortError") {
+            const detail = await historyLoadErrorText(error);
+            status.textContent = detail;
+        }
     } finally {
         historyPreviewOpening = false;
         if (historyRequest === request) {

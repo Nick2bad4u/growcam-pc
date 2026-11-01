@@ -212,11 +212,21 @@ class CameraControlCoordinator:
         self._client: DVRIPClient | None = None
         self._keepalive_stop = threading.Event()
         self._keepalive_thread: threading.Thread | None = None
+        self._operation_cancelled = threading.Event()
 
     def snapshot(self) -> CameraControlState:
         """Return the current immutable state without waiting for a camera operation."""
         with self._state_lock:
             return self._state
+
+    def cancel_active_operation(self) -> None:
+        """Mark the active media transfer as abandoned by its browser client.
+
+        Teardown errors from a stream the browser itself walked away from are
+        self-inflicted and must not open the DVRIP circuit; the replacement
+        preview needs a fresh session, not paused camera controls.
+        """
+        self._operation_cancelled.set()
 
     @contextmanager
     def camera(self, *, explicit_retry: bool = False) -> Generator[DVRIPClient, None, None]:
@@ -262,12 +272,21 @@ class CameraControlCoordinator:
                 # DVRIP-backed tab and costs another login on the next request.
                 raise
             except (DVRIPError, OSError, TypeError, ValueError) as error:
-                self._block_client(
-                    error,
-                    allow_retry=not explicit_retry and self._manual_retry_is_safe(error),
-                )
+                if self._operation_cancelled.is_set():
+                    # The browser abandoned this media stream, so the transfer
+                    # error says nothing about camera health. Retire the possibly
+                    # half-closed session so the next request logs in fresh, and
+                    # keep controls available instead of opening the circuit.
+                    self._retire_client_quietly()
+                    self._set_state(CameraControlState(CameraControlStatus.AVAILABLE))
+                else:
+                    self._block_client(
+                        error,
+                        allow_retry=not explicit_retry and self._manual_retry_is_safe(error),
+                    )
                 raise
         finally:
+            self._operation_cancelled.clear()
             self._operation_lock.release()
 
     def close(self) -> None:
@@ -325,12 +344,15 @@ class CameraControlCoordinator:
         return max(1.0, min(10.0, camera.login_info.keepalive_interval / 2))
 
     def _block_client(self, error: Exception, *, allow_retry: bool) -> None:
+        self._retire_client_quietly()
+        self._set_state(self._blocked_state(error, allow_retry=allow_retry))
+
+    def _retire_client_quietly(self) -> None:
         camera = self._client
         self._client = None
         if camera is not None:
             with suppress(DVRIPError, OSError, TypeError, ValueError):
                 camera.close()
-        self._set_state(self._blocked_state(error, allow_retry=allow_retry))
 
     @staticmethod
     def _blocked_state(error: Exception, *, allow_retry: bool) -> CameraControlState:
@@ -1061,7 +1083,15 @@ class GrowCamHandler(BaseHTTPRequestHandler):
         self.close_connection = True
 
         def consume(chunk: bytes) -> None:
-            _write_preview_chunk(self.wfile, chunk)
+            try:
+                _write_preview_chunk(self.wfile, chunk)
+            except PreviewClientDisconnectedError:
+                # The browser abandoned this transfer, so the camera teardown
+                # errors that follow are self-inflicted. Tell the coordinator
+                # before unwinding so the shared DVRIP circuit stays available.
+                controls = cast("GrowCamHTTPServer", self.server).camera_controls
+                controls.cancel_active_operation()
+                raise
 
         if recover_audio:
             _ = build_xm_fragmented_preview(
@@ -1106,6 +1136,11 @@ class GrowCamHandler(BaseHTTPRequestHandler):
                 cache_status="HIT",
             )
             return
+        if not building and server.media_cache.stats().busy:
+            # A different preview owns the single camera media slot. Reporting a
+            # plain miss here would send the browser into a guaranteed conflict
+            # response that a video element cannot explain.
+            building = True
         status = HTTPStatus.ACCEPTED if building else HTTPStatus.OK
         self._json({"ready": False, "building": building}, status=status)
 
@@ -1481,8 +1516,15 @@ def _history_preview_range(
         raise WebRequestError(HTTPStatus.BAD_REQUEST, "Quick rewind duration must be 60, 120, 300, or 600 seconds")
     recording_start = _camera_datetime(record["beginTime"])
     recording_end = _camera_datetime(record["endTime"])
+    if bool(record.get("active")):
+        # The index reports the scheduled end of the segment being written, but
+        # only the part that already reached the card can stream back down.
+        recording_end = min(recording_end, datetime.now())
     if not recording_start <= requested_start < recording_end:
-        raise WebRequestError(HTTPStatus.BAD_REQUEST, "Quick rewind time is outside the selected recording")
+        raise WebRequestError(
+            HTTPStatus.BAD_REQUEST,
+            "Quick rewind time is outside the recorded part of the selected recording",
+        )
     requested_end = min(requested_start + timedelta(seconds=duration_seconds), recording_end)
     if requested_end <= requested_start:
         raise WebRequestError(HTTPStatus.BAD_REQUEST, "Quick rewind window is empty")
