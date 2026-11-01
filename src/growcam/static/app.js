@@ -26,6 +26,10 @@ let appSettingsData = null;
 let selectedHistoryIndex = -1;
 let selectedHistorySeconds = null;
 let historyPlaybackStartSeconds = null;
+// The moment the media itself starts playing. A Full block streams from the
+// beginning of its recording, while a timed window streams from its `at`
+// moment, so this can differ from the scrubber selection.
+let historyMediaOriginSeconds = null;
 let pendingConfig = null;
 let isFormIsDirty = false;
 let isAppSettingsDirty = false;
@@ -1106,6 +1110,7 @@ function renderHistory(payload) {
     selectedHistoryIndex = -1;
     selectedHistorySeconds = null;
     historyPlaybackStartSeconds = null;
+    historyMediaOriginSeconds = null;
     const timeline = document.querySelector("#history-timeline");
     const list = document.querySelector("#history-list");
     const recordings = payload.recordings;
@@ -1246,6 +1251,7 @@ function selectScrubberMoment() {
     selectedHistoryIndex = -1;
     selectedHistorySeconds = seconds;
     historyPlaybackStartSeconds = null;
+    historyMediaOriginSeconds = null;
     highlightHistorySelection(-1);
     document.querySelector("#history-title").textContent =
         `${clockForSeconds(seconds)} · no recording`;
@@ -1316,6 +1322,8 @@ async function buildHistoryPreview(recording, atSeconds) {
             (Math.min(duration, bounds.end - atSeconds) / recordingDuration);
     }
     historyPlaybackStartSeconds = atSeconds;
+    historyMediaOriginSeconds =
+        historyWindow.value === "full" ? bounds.start : atSeconds;
     card.setAttribute("aria-busy", "true");
     document.querySelector("#history-snapshot").hidden = true;
     const startedAt = performance.now();
@@ -1430,7 +1438,7 @@ function saveHistorySnapshot() {
     canvas.height = historyVideo.videoHeight;
     canvas.getContext("2d").drawImage(historyVideo, 0, 0);
     const seconds = Math.round(
-        (historyPlaybackStartSeconds ?? 0) + historyVideo.currentTime
+        (historyMediaOriginSeconds ?? 0) + historyVideo.currentTime
     );
     const stamp = isoForDaySeconds(historyData?.date || "", seconds);
     const fileName = `growcam-rewind-${stamp.slice(0, 10)}-${stamp
