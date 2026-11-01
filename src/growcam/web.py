@@ -78,6 +78,9 @@ _TIMELAPSE_API = "/api/timelapse"
 _MP4_CONTENT_TYPE = "video/mp4"
 _INVALID_BYTE_RANGE = "Media byte range is invalid"
 _ACCOUNT_REJECTION_RETURN_CODES = frozenset({106, 203, 204, 205, 206, 207, 430})
+# Local parsers reject what the camera sent; they never mean the DVRIP session
+# itself failed, so they must not open the camera-control circuit.
+_PAYLOAD_VALIDATION_ERRORS: tuple[type[Exception], ...] = (SettingsValidationError, TimelapseValidationError)
 _CONTENT_SECURITY_POLICY = (
     "default-src 'self'; base-uri 'none'; connect-src 'self'; form-action 'self'; "
     "frame-ancestors 'none'; img-src 'self' blob:; media-src 'self' blob:; object-src 'none'; "
@@ -209,11 +212,21 @@ class CameraControlCoordinator:
         self._client: DVRIPClient | None = None
         self._keepalive_stop = threading.Event()
         self._keepalive_thread: threading.Thread | None = None
+        self._operation_cancelled = threading.Event()
 
     def snapshot(self) -> CameraControlState:
         """Return the current immutable state without waiting for a camera operation."""
         with self._state_lock:
             return self._state
+
+    def cancel_active_operation(self) -> None:
+        """Mark the active media transfer as abandoned by its browser client.
+
+        Teardown errors from a stream the browser itself walked away from are
+        self-inflicted and must not open the DVRIP circuit; the replacement
+        preview needs a fresh session, not paused camera controls.
+        """
+        self._operation_cancelled.set()
 
     @contextmanager
     def camera(self, *, explicit_retry: bool = False) -> Generator[DVRIPClient, None, None]:
@@ -253,13 +266,27 @@ class CameraControlCoordinator:
                 self._ensure_keepalive_thread()
             try:
                 yield camera
+            except _PAYLOAD_VALIDATION_ERRORS:
+                # The camera answered this request normally; only our own parser
+                # rejected the payload. Tearing the session down here pauses every
+                # DVRIP-backed tab and costs another login on the next request.
+                raise
             except (DVRIPError, OSError, TypeError, ValueError) as error:
-                self._block_client(
-                    error,
-                    allow_retry=not explicit_retry and self._manual_retry_is_safe(error),
-                )
+                if self._operation_cancelled.is_set():
+                    # The browser abandoned this media stream, so the transfer
+                    # error says nothing about camera health. Retire the possibly
+                    # half-closed session so the next request logs in fresh, and
+                    # keep controls available instead of opening the circuit.
+                    self._retire_client_quietly()
+                    self._set_state(CameraControlState(CameraControlStatus.AVAILABLE))
+                else:
+                    self._block_client(
+                        error,
+                        allow_retry=not explicit_retry and self._manual_retry_is_safe(error),
+                    )
                 raise
         finally:
+            self._operation_cancelled.clear()
             self._operation_lock.release()
 
     def close(self) -> None:
@@ -317,12 +344,15 @@ class CameraControlCoordinator:
         return max(1.0, min(10.0, camera.login_info.keepalive_interval / 2))
 
     def _block_client(self, error: Exception, *, allow_retry: bool) -> None:
+        self._retire_client_quietly()
+        self._set_state(self._blocked_state(error, allow_retry=allow_retry))
+
+    def _retire_client_quietly(self) -> None:
         camera = self._client
         self._client = None
         if camera is not None:
             with suppress(DVRIPError, OSError, TypeError, ValueError):
                 camera.close()
-        self._set_state(self._blocked_state(error, allow_retry=allow_retry))
 
     @staticmethod
     def _blocked_state(error: Exception, *, allow_retry: bool) -> CameraControlState:
@@ -366,6 +396,8 @@ class GrowCamHTTPServer(ThreadingHTTPServer):
         self.camera_operation_lock = threading.Lock()
         self.recording_metadata_lock = threading.Lock()
         self.recording_metadata: OrderedDict[str, tuple[float, dict[str, object]]] = OrderedDict()
+        self._held_recordings: dict[str, dict[int, dict[str, object]]] = {}
+        self._recording_hold_token = 0
         self.settings_store = SettingsStore(settings_file)
         app_settings = self.settings_store.snapshot()
         super().__init__(address, GrowCamHandler)
@@ -391,15 +423,56 @@ class GrowCamHTTPServer(ThreadingHTTPServer):
                 _ = self.recording_metadata.popitem(last=False)
 
     def cached_recording(self, filename: str) -> dict[str, object] | None:
-        """Return fresh recording metadata previously sent to this browser session."""
+        """Return recording metadata this browser session can resolve without the camera."""
         now = time_module.monotonic()
         with self.recording_metadata_lock:
+            held = self._held_recordings.get(filename)
+            if held:
+                # The newest active hold answers first, exactly as a nested
+                # shadow would; older holds stay queued behind it.
+                return dict(held[max(held)])
             self._discard_expired_recordings(now)
             cached = self.recording_metadata.get(filename)
             if cached is None:
                 return None
             self.recording_metadata.move_to_end(filename)
             return dict(cached[1])
+
+    @contextmanager
+    def hold_recording_metadata(self, *filenames: str, record: dict[str, object]) -> Generator[None, None, None]:
+        """Keep one preview's metadata resolvable while its camera media operation runs.
+
+        A progressive preview holds the shared DVRIP session for as long as it
+        streams, which is far longer than the short recording index TTL. Browsers
+        keep probing that preview's cache entry while it plays, so the entry it
+        needs has to stay resolvable without asking the camera for it again.
+        Each hold owns a token, so overlapping previews exit in any order: a
+        finishing request releases only its own token, the newest remaining
+        hold keeps the entry resolvable, and the last release clears it.
+        """
+        with self.recording_metadata_lock:
+            claimed: list[tuple[str, int]] = []
+            for filename in filenames:
+                self._recording_hold_token += 1
+                token = self._recording_hold_token
+                self._held_recordings.setdefault(filename, {})[token] = record
+                claimed.append((filename, token))
+        try:
+            yield
+        finally:
+            with self.recording_metadata_lock:
+                for filename, token in claimed:
+                    holders = self._held_recordings.get(filename)
+                    if holders is None:
+                        continue
+                    _ = holders.pop(token, None)
+                    if not holders:
+                        del self._held_recordings[filename]
+
+    def remember_held_recording(self, *filenames: str, record: dict[str, object]) -> None:
+        """Restart the short index TTL for a recording this browser is still working with."""
+        aliases = [{**record, "fileName": filename} for filename in dict.fromkeys(filenames)]
+        self.remember_recordings(aliases)
 
     def _discard_expired_recordings(self, now: float) -> None:
         expired = [
@@ -709,12 +782,11 @@ class GrowCamHandler(BaseHTTPRequestHandler):
                     channel=0,
                     event="E",
                 )
-                config = TimelapseConfig.from_camera(camera.config_get(TIMELAPSE_CONFIG_NAME))
-                current_timelapses, active_timelapse_filename = _timelapse_index(camera, config, now)
+                scheduled_timelapses, active_timelapse_filename = _scheduled_timelapses(camera, now)
                 indexed_by_name = {
                     str(record.get("FileName", "")): record for record in timelapses if record.get("FileName")
                 }
-                for record in current_timelapses:
+                for record in scheduled_timelapses:
                     filename = str(record.get("FileName", ""))
                     if filename and _recording_overlaps(record, day_start, day_end):
                         indexed_by_name[filename] = record
@@ -821,6 +893,9 @@ class GrowCamHandler(BaseHTTPRequestHandler):
         server = cast("GrowCamHTTPServer", self.server)
         record = server.cached_recording(camera_file)
         if record is None:
+            if cache_only:
+                self._preview_cache_probe_unresolved()
+                return
             record = _matching_recording(self._timelapse_state(), camera_file)
         resolved_file = cast("str", record["fileName"])
         key = f"timelapse:{_TIMELAPSE_PREVIEW_VERSION}:{_recording_identity(resolved_file)}:{record['sizeBytes']}"
@@ -853,12 +928,14 @@ class GrowCamHandler(BaseHTTPRequestHandler):
             )
 
         try:
-            preview, cache_hit = server.media_cache.get_or_build(key, ".mp4", build)
+            with server.hold_recording_metadata(camera_file, resolved_file, record=record):
+                preview, cache_hit = server.media_cache.get_or_build(key, ".mp4", build)
         except (OSError, RuntimeError, ValueError):
             if response_started:
                 self.close_connection = True
                 return
             raise
+        server.remember_held_recording(camera_file, resolved_file, record=record)
         if response_started:
             return
         self._send_file(
@@ -884,11 +961,19 @@ class GrowCamHandler(BaseHTTPRequestHandler):
         if day_end <= day_start:
             raise WebRequestError(HTTPStatus.NOT_FOUND, "No recording exists for that future date")
         server = cast("GrowCamHTTPServer", self.server)
-        record = self._history_recording(camera_file, selected_date, day_start, day_end)
+        record = server.cached_recording(camera_file)
+        if record is None:
+            if cache_only:
+                self._preview_cache_probe_unresolved()
+                return
+            record = self._history_recording(camera_file, selected_date, day_start, day_end)
         resolved_file = cast("str", record["fileName"])
         preview_range = _history_preview_range(record, at=at, duration=duration)
         range_key = (
-            "full" if preview_range is None else f"{preview_range[0].isoformat()}:{preview_range[1].isoformat()}"
+            "full"
+            if preview_range is None
+            else f"{preview_range.start.isoformat()}:"
+            f"{'live' if preview_range.open_ended else preview_range.end.isoformat()}"
         )
         key = (
             f"history:{_HISTORY_PREVIEW_VERSION}:{video_codec}:{_recording_identity(resolved_file)}:"
@@ -914,12 +999,14 @@ class GrowCamHandler(BaseHTTPRequestHandler):
             )
 
         try:
-            preview, cache_hit = server.media_cache.get_or_build(key, ".mp4", build)
+            with server.hold_recording_metadata(camera_file, resolved_file, record=record):
+                preview, cache_hit = server.media_cache.get_or_build(key, ".mp4", build)
         except (OSError, RuntimeError, ValueError):
             if response_started:
                 self.close_connection = True
                 return
             raise
+        server.remember_held_recording(camera_file, resolved_file, record=record)
         if response_started:
             return
         self._send_file(
@@ -933,7 +1020,7 @@ class GrowCamHandler(BaseHTTPRequestHandler):
         self,
         record: dict[str, object],
         resolved_file: str,
-        preview_range: tuple[datetime, datetime] | None,
+        preview_range: _PreviewWindow | None,
     ) -> Callable[[BinaryIO], int]:
         """Build a lazy camera source for one full or time-bounded rewind preview."""
         if preview_range is not None:
@@ -941,8 +1028,8 @@ class GrowCamHandler(BaseHTTPRequestHandler):
             def ranged_source(output: BinaryIO) -> int:
                 with self._camera() as camera:
                     return camera.stream_download_by_time(
-                        start=preview_range[0],
-                        end=preview_range[1],
+                        start=preview_range.start,
+                        end=preview_range.end,
                         output=output,
                         file_type=0,
                     )
@@ -1010,7 +1097,15 @@ class GrowCamHandler(BaseHTTPRequestHandler):
         self.close_connection = True
 
         def consume(chunk: bytes) -> None:
-            _write_preview_chunk(self.wfile, chunk)
+            try:
+                _write_preview_chunk(self.wfile, chunk)
+            except PreviewClientDisconnectedError:
+                # The browser abandoned this transfer, so the camera teardown
+                # errors that follow are self-inflicted. Tell the coordinator
+                # before unwinding so the shared DVRIP circuit stays available.
+                controls = cast("GrowCamHTTPServer", self.server).camera_controls
+                controls.cancel_active_operation()
+                raise
 
         if recover_audio:
             _ = build_xm_fragmented_preview(
@@ -1034,6 +1129,16 @@ class GrowCamHandler(BaseHTTPRequestHandler):
             align_video_to_audio=recover_audio,
         )
 
+    def _preview_cache_probe_unresolved(self) -> None:
+        """Report a cache-only probe as a miss without competing for the camera session.
+
+        The probe only asks whether a cached preview already exists. Its caller
+        is about to run the real preview request, which resolves the recording
+        index itself, so a cold probe must never raise the busy-camera conflict
+        that a long-running media operation causes.
+        """
+        self._json({"ready": False, "building": False})
+
     def _preview_cache_probe(self, key: str, *, disposition: str) -> None:
         server = cast("GrowCamHTTPServer", self.server)
         preview, building = server.media_cache.lookup(key, ".mp4")
@@ -1045,6 +1150,11 @@ class GrowCamHandler(BaseHTTPRequestHandler):
                 cache_status="HIT",
             )
             return
+        if not building and server.media_cache.stats().busy:
+            # A different preview owns the single camera media slot. Reporting a
+            # plain miss here would send the browser into a guaranteed conflict
+            # response that a video element cannot explain.
+            building = True
         status = HTTPStatus.ACCEPTED if building else HTTPStatus.OK
         self._json({"ready": False, "building": building}, status=status)
 
@@ -1256,6 +1366,21 @@ def _active_timelapse_filename(
     return ""
 
 
+def _scheduled_timelapses(camera: DVRIPClient, now: datetime) -> tuple[list[dict[str, Any]], str]:
+    """Return the current schedule's index rows and its active filename.
+
+    An unparsable ``Storage.EpitomeRecord`` must not hide the Files listing: the
+    day's ``E`` partition index is already known, so degrade to no schedule rows
+    and no active marker. The Time-lapse view still reports the configuration
+    error itself.
+    """
+    try:
+        config = TimelapseConfig.from_camera(camera.config_get(TIMELAPSE_CONFIG_NAME))
+    except TimelapseValidationError:
+        return [], ""
+    return _timelapse_index(camera, config, now)
+
+
 def _timelapse_update_request(payload: dict[str, object]) -> tuple[str, TimelapseConfig]:
     expected_revision = payload.get("expectedRevision")
     if not isinstance(expected_revision, str) or not expected_revision:
@@ -1386,12 +1511,28 @@ def _history_date(value: str) -> date:
         raise WebRequestError(HTTPStatus.BAD_REQUEST, "History date must use YYYY-MM-DD") from error
 
 
+@dataclass(frozen=True, slots=True)
+class _PreviewWindow:
+    """One resolved quick-rewind range plus whether its end is still moving.
+
+    ``open_ended`` marks a window cut short by the live edge of a segment
+    still being written. That end is a moving clock reading, so it must not
+    become part of the cache identity; requests for the same window share one
+    identity whenever it is open-ended and find the preview already built
+    instead of rebuilding at every new reading of the clock.
+    """
+
+    start: datetime
+    end: datetime
+    open_ended: bool
+
+
 def _history_preview_range(
     record: dict[str, object],
     *,
     at: str,
     duration: str,
-) -> tuple[datetime, datetime] | None:
+) -> _PreviewWindow | None:
     if not at and not duration:
         return None
     if not at or not duration:
@@ -1405,12 +1546,24 @@ def _history_preview_range(
         raise WebRequestError(HTTPStatus.BAD_REQUEST, "Quick rewind duration must be 60, 120, 300, or 600 seconds")
     recording_start = _camera_datetime(record["beginTime"])
     recording_end = _camera_datetime(record["endTime"])
+    if bool(record.get("active")):
+        # The index reports the scheduled end of the segment being written, but
+        # only the part that already reached the card can stream back down.
+        recording_end = min(recording_end, datetime.now())
     if not recording_start <= requested_start < recording_end:
-        raise WebRequestError(HTTPStatus.BAD_REQUEST, "Quick rewind time is outside the selected recording")
-    requested_end = min(requested_start + timedelta(seconds=duration_seconds), recording_end)
+        raise WebRequestError(
+            HTTPStatus.BAD_REQUEST,
+            "Quick rewind time is outside the recorded part of the selected recording",
+        )
+    window_end = requested_start + timedelta(seconds=duration_seconds)
+    requested_end = min(window_end, recording_end)
     if requested_end <= requested_start:
         raise WebRequestError(HTTPStatus.BAD_REQUEST, "Quick rewind window is empty")
-    return requested_start, requested_end
+    return _PreviewWindow(
+        start=requested_start,
+        end=requested_end,
+        open_ended=bool(record.get("active")) and requested_end < window_end,
+    )
 
 
 def _preview_video_codec(value: str) -> str:

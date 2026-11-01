@@ -68,6 +68,10 @@ Completed previews are indexed and cached. Opening the same unchanged file again
 
 For the quickest first result, choose a one- or two-minute Rewind window and keep playback mode on **Auto**. A full recording block or an in-progress multi-day time-lapse requires a longer camera transfer and more encoding before its complete seekable cache is ready.
 
+## A preview warns that its cache is unavailable
+
+A preview streams from the camera while that same operation builds its indexed cache, and only one camera media operation runs at a time. The browser re-checks the cache while the preview plays, so a check that lands while the camera is still busy waits and retries instead of stopping; the copy then upgrades to the seekable cached version when the transfer finishes. If the warning still appears, its text carries the camera's own reason. The streamed preview you are watching is unaffected, and reopening it starts from the completed cache.
+
 ## A time-lapse preview is too short or misses captures
 
 Refresh the Time-lapse view and build **Preview latest** again. Active files receive a new cache identity as their reported size changes. A complete preview reports its recovered frame count; that count should closely match the schedule's estimated captures so far. GrowCam PC uses the camera's download-style by-time range command because playback mode can return only the beginning of a long-running time-lapse. The cold stream runs at 2 fps while the camera is delivering frames; the completed cache is retimed to 25 fps.

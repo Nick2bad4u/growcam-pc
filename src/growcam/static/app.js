@@ -26,6 +26,10 @@ let appSettingsData = null;
 let selectedHistoryIndex = -1;
 let selectedHistorySeconds = null;
 let historyPlaybackStartSeconds = null;
+// The moment the media itself starts playing. A Full block streams from the
+// beginning of its recording, while a timed window streams from its `at`
+// moment, so this can differ from the scrubber selection.
+let historyMediaOriginSeconds = null;
 let pendingConfig = null;
 let isFormIsDirty = false;
 let isAppSettingsDirty = false;
@@ -285,12 +289,71 @@ async function previewCacheState(url, signal) {
     if (response.status === 404) {
         return "missing";
     }
-    if (!response.ok)
-        throw new Error(`Preview cache check failed (${response.status}).`);
+    if (!response.ok) {
+        const detail = await response.json().catch(() => undefined);
+        const reason =
+            typeof detail?.error === "string" && detail.error
+                ? `: ${detail.error}`
+                : ".";
+        const error = new Error(
+            `Preview cache check failed (${response.status})${reason}`
+        );
+        // A long media operation owns the one camera session, so 409 and server
+        // errors are wait-and-retry outcomes; 4xx responses are real faults.
+        error.isTransient = response.status === 409 || response.status >= 500;
+        throw error;
+    }
     const payload = await response.json();
     return payload.building ? "building" : "missing";
 }
 
+/**
+ * Only one camera media operation streams at a time, and a browser cannot read
+ * the server's conflict response out of a failed video element. Keep probing
+ * while the media queue is busy so the player never starts a load the camera
+ * session is guaranteed to reject.
+ */
+async function waitForPreviewMediaSlot(url, state, signal, onWaiting) {
+    let currentState = state;
+    let transientFailures = 0;
+    while (currentState === "building" && !signal.aborted) {
+        onWaiting();
+        await delayWithSignal(750, signal);
+        try {
+            currentState = await previewCacheState(url, signal);
+            transientFailures = 0;
+        } catch (error) {
+            if (!error?.isTransient || transientFailures >= 8) throw error;
+            transientFailures += 1;
+        }
+    }
+    return currentState;
+}
+
+/**
+ * A failed media load cannot say why it failed, and one common reason is a
+ * paused camera session. Ask the control endpoint so the operator sees the
+ * actual cause and the Retry action instead of a bare media error.
+ */
+async function historyLoadErrorText(error) {
+    const base = errorMessage(error);
+    try {
+        const control = await getJson("/api/camera-control");
+        if (control?.circuitOpen === true) {
+            return `${control.message || base} · camera controls paused — use "Retry camera controls" in the banner above`;
+        }
+    } catch {
+        // A control probe never outranks the media failure just reported.
+    }
+    return base;
+}
+
+/**
+ * Upgrade a playing progressive preview to its cached copy once the camera
+ * operation that produced it finishes. A busy camera session briefly outranks a
+ * cache probe, so a few consecutive probe failures keep waiting instead of
+ * telling the operator the accelerated cache is unavailable.
+ */
 async function promoteCachedVideo(
     video,
     url,
@@ -299,8 +362,17 @@ async function promoteCachedVideo(
     timestampScale,
     onReady
 ) {
+    let transientFailures = 0;
     while (!request.signal.aborted && isCurrent()) {
-        const state = await previewCacheState(url, request.signal);
+        let state;
+        try {
+            state = await previewCacheState(url, request.signal);
+            transientFailures = 0;
+        } catch (error) {
+            if (!error?.isTransient || transientFailures >= 8) throw error;
+            transientFailures += 1;
+            state = "building";
+        }
         if (state === "ready") {
             await resumeCachedVideo(
                 video,
@@ -1033,10 +1105,12 @@ function renderHistory(payload) {
     document.querySelector("#history-title").textContent =
         "Choose a segment below";
     document.querySelector("#history-download").hidden = true;
+    document.querySelector("#history-snapshot").hidden = true;
     historyData = payload;
     selectedHistoryIndex = -1;
     selectedHistorySeconds = null;
     historyPlaybackStartSeconds = null;
+    historyMediaOriginSeconds = null;
     const timeline = document.querySelector("#history-timeline");
     const list = document.querySelector("#history-list");
     const recordings = payload.recordings;
@@ -1177,6 +1251,7 @@ function selectScrubberMoment() {
     selectedHistoryIndex = -1;
     selectedHistorySeconds = seconds;
     historyPlaybackStartSeconds = null;
+    historyMediaOriginSeconds = null;
     highlightHistorySelection(-1);
     document.querySelector("#history-title").textContent =
         `${clockForSeconds(seconds)} · no recording`;
@@ -1217,7 +1292,7 @@ function selectHistorySegment(index, atSeconds = null) {
     document.querySelector("#history-next").disabled =
         index >= recordings.length - 1;
     const download = document.querySelector("#history-download");
-    download.href = `/api/download?file=${encodeURIComponent(recording.fileName)}`;
+    download.dataset.file = recording.fileName;
     download.hidden = recording.active;
     buildHistoryPreview(recording, requestedSeconds);
 }
@@ -1247,7 +1322,10 @@ async function buildHistoryPreview(recording, atSeconds) {
             (Math.min(duration, bounds.end - atSeconds) / recordingDuration);
     }
     historyPlaybackStartSeconds = atSeconds;
+    historyMediaOriginSeconds =
+        historyWindow.value === "full" ? bounds.start : atSeconds;
     card.setAttribute("aria-busy", "true");
+    document.querySelector("#history-snapshot").hidden = true;
     const startedAt = performance.now();
     let isPlaybackStarted = false;
     let isUsedCompatibleFallback = false;
@@ -1257,6 +1335,15 @@ async function buildHistoryPreview(recording, atSeconds) {
     try {
         try {
             cacheState = await previewCacheState(previewUrl, request.signal);
+            cacheState = await waitForPreviewMediaSlot(
+                previewUrl,
+                cacheState,
+                request.signal,
+                () => {
+                    status.textContent =
+                        "Waiting for the camera media queue…";
+                }
+            );
             await loadVideoStream(historyVideo, previewUrl, request.signal);
         } catch (error) {
             const preference =
@@ -1274,11 +1361,21 @@ async function buildHistoryPreview(recording, atSeconds) {
             status.textContent =
                 "Native HEVC did not play; retrying compatible H.264…";
             cacheState = await previewCacheState(previewUrl, request.signal);
+            cacheState = await waitForPreviewMediaSlot(
+                previewUrl,
+                cacheState,
+                request.signal,
+                () => {
+                    status.textContent =
+                        "Waiting for the camera media queue…";
+                }
+            );
             await loadVideoStream(historyVideo, previewUrl, request.signal);
         }
         if (historyRequest !== request) return;
         isPlaybackStarted = true;
         document.querySelector("#history-placeholder").hidden = true;
+        document.querySelector("#history-snapshot").hidden = false;
         await historyVideo.play().catch(() => undefined);
         status.textContent = `${isUsedCompatibleFallback ? "Compatible H.264 fallback · " : ""}Ready in ${loadTimeLabel(startedAt)} · cached when complete.`;
         if (cacheState === "missing") {
@@ -1303,8 +1400,10 @@ async function buildHistoryPreview(recording, atSeconds) {
             });
         }
     } catch (error) {
-        if (!(error instanceof DOMException) || error.name !== "AbortError")
-            status.textContent = errorMessage(error);
+        if (!(error instanceof DOMException) || error.name !== "AbortError") {
+            const detail = await historyLoadErrorText(error);
+            status.textContent = detail;
+        }
     } finally {
         historyPreviewOpening = false;
         if (historyRequest === request) {
@@ -1312,6 +1411,56 @@ async function buildHistoryPreview(recording, atSeconds) {
             card.setAttribute("aria-busy", "false");
         }
     }
+}
+
+/**
+ * Hand the selected recording to the browser as a file. The endpoint answers
+ * with an attachment header, so navigation starts the save and keeps the page.
+ */
+function downloadHistoryMkv() {
+    const file = document.querySelector("#history-download").dataset.file;
+    if (file) location.assign(`/api/download?file=${encodeURIComponent(file)}`);
+}
+
+/**
+ * Save the frame currently on the rewind screen. The canvas and the media
+ * both come from this loopback server, so the canvas is never tainted and
+ * the capture never contacts the camera.
+ */
+function saveHistorySnapshot() {
+    const status = document.querySelector("#history-status");
+    if (historyVideo.readyState < 2 || !historyVideo.videoWidth) {
+        status.textContent = "Wait for the preview to start before saving.";
+        return;
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = historyVideo.videoWidth;
+    canvas.height = historyVideo.videoHeight;
+    canvas.getContext("2d").drawImage(historyVideo, 0, 0);
+    const seconds = Math.round(
+        (historyMediaOriginSeconds ?? 0) + historyVideo.currentTime
+    );
+    const stamp = isoForDaySeconds(historyData?.date || "", seconds);
+    const fileName = `growcam-rewind-${stamp.slice(0, 10)}-${stamp
+        .slice(11)
+        .replaceAll(":", ".")}.jpg`;
+    canvas.toBlob(
+        (blob) => {
+            if (!blob) {
+                status.textContent = "The browser could not encode this frame.";
+                return;
+            }
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = fileName;
+            link.click();
+            setTimeout(() => URL.revokeObjectURL(url), 30_000);
+            status.textContent = `Snapshot saved as ${fileName}.`;
+        },
+        "image/jpeg",
+        0.92
+    );
 }
 
 /**
@@ -1935,6 +2084,13 @@ historyWindow.addEventListener("change", () => {
     if (selectedHistoryIndex >= 0 && selectedHistorySeconds !== null)
         selectHistorySegment(selectedHistoryIndex, selectedHistorySeconds);
 });
+document
+    .querySelector("#history-download")
+    .addEventListener("click", downloadHistoryMkv);
+document.querySelector("#history-snapshot").addEventListener(
+    "click",
+    saveHistorySnapshot
+);
 historyVideo.addEventListener("timeupdate", () => {
     if (historyPlaybackStartSeconds === null) return;
     setScrubberPosition(historyPlaybackStartSeconds + historyVideo.currentTime);
